@@ -3,7 +3,9 @@ import plotly.graph_objects as go
 import streamlit as st
 import time
 from kafka import KafkaConsumer
-
+import json
+import threading
+import duckdb
 # PAGE SETUP
 st.set_page_config(page_title="Redset Dashboard", page_icon=":bar_chart:", layout="wide")
 
@@ -32,61 +34,121 @@ st.markdown(
 st.title("Redset Dashboard")
 st.markdown("*Prototype v1.1*: Query Metrics with Stress Indicator and Visualization")
 
+# DuckDB setup: Create or connect to an in-memory database
+conn = duckdb.connect('historical_data.duckdb')  # Change the filename for persistent storage
+
+# Create a table if it doesn't exist
+conn.execute("""
+CREATE TABLE IF NOT EXISTS kafka_data (
+    query_id STRING,
+    arrival_timestamp TIMESTAMP,
+    compile_duration_ms INTEGER,
+    execution_duration_ms INTEGER,
+    queue_duration_ms INTEGER,
+    was_aborted BOOLEAN,
+    was_cached BOOLEAN,
+    query_type STRING,
+    num_permanent_tables_accessed INTEGER,
+    num_external_tables_accessed INTEGER,
+    num_system_tables_accessed INTEGER
+);
+""")
+
 #######################################
-# KAFKA CONSUMER - Fetch BATCH FILES (Sidebar)
+# KAFKA CONSUMER (Replacing File Upload)
 #######################################
 
-# Define Kafka settings (you can adjust these values as per your Kafka setup)
-KAFKA_TOPIC = 'your_topic_name'
-KAFKA_SERVER = 'localhost:9092'
-
+# Kafka Consumer Setup
+KAFKA_SERVER = 'localhost:9092'  # Kafka server address
+KAFKA_TOPIC = 'your_topic_name'  # Replace with your Kafka topic
 consumer = KafkaConsumer(
     KAFKA_TOPIC,
-    bootstrap_servers=[KAFKA_SERVER],
-    group_id='streamlit-dashboard-group',
-    auto_offset_reset='earliest'
+    bootstrap_servers=KAFKA_SERVER,
+    group_id='my-group',
+    value_deserializer=lambda x: json.loads(x.decode('utf-8'))
 )
 
-# Streamlit interface for showing batch details in the sidebar
-with st.sidebar:
-    st.header("Batch Files Received")
+# Shared data storage for Streamlit
+message_data = []
 
-    batch_data = []
-
+def consume_kafka_data():
+    """ Function to consume data from Kafka and update message_data """
+    global message_data
     for message in consumer:
-        # The message value is the raw byte content, assuming it's a CSV file in each message
-        file_data = message.value  # This should be the CSV content in bytes
-
-        # Convert to a file-like object (Pandas can read from this)
-        file_like = io.BytesIO(file_data)
+        # Assuming the Kafka message is a dictionary and is JSON serializable
+        message_data.append(message.value)
         
-        try:
-            # Attempt to read the CSV into a pandas dataframe
-            df = pd.read_csv(file_like)
+        # Store the incoming data into DuckDB
+        df = pd.DataFrame(message_data)
+        conn.executemany("""
+            INSERT INTO kafka_data (query_id, arrival_timestamp, compile_duration_ms, execution_duration_ms, 
+                                    queue_duration_ms, was_aborted, was_cached, query_type,
+                                    num_permanent_tables_accessed, num_external_tables_accessed, num_system_tables_accessed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, df.values.tolist())
+        
+        # Update Streamlit UI when a new batch of data is consumed
+        if len(message_data) > 0:
+            batch_size = len(message_data)
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+            st.sidebar.write(f"New Data Batch Arrived: {batch_size} records at {timestamp}")
+            
+            # Create DataFrame from the batch of messages
+            st.subheader("Batch Data Preview")
+            st.dataframe(df)
 
-            # Display details about the batch received
-            file_size = len(file_data) / 1024  # Size in KB
-            upload_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-            
-            # Add to batch data list
-            batch_data.append({
-                "File Size (KB)": round(file_size, 2),
-                "Uploaded at": upload_time,
-                "Rows in Data": len(df),
-                "Columns": ', '.join(df.columns)
-            })
-            
-            # Display received batch information in the sidebar
-            st.subheader(f"Batch {len(batch_data)} - File Details")
-            st.write(batch_data[-1])  # Show the last batch info
-            st.dataframe(df.head())  # Preview the first few rows of the received file
+# Run the Kafka consumer in a separate thread
+consumer_thread = threading.Thread(target=consume_kafka_data, daemon=True)
+consumer_thread.start()
 
-            # Break after processing one batch for demonstration (this could loop continuously or based on your logic)
-            break
-            
-        except Exception as e:
-            st.error(f"Error processing batch file: {e}")
-            continue  # Skip to the next message in case of error
+#######################################
+# HISTORICAL DATA QUERY (from DuckDB)
+#######################################
+
+st.subheader("Search Historical Data by Date Range")
+
+# Select a date range
+start_date = st.date_input("Start Date", min_value=pd.to_datetime("2022-01-01"))
+end_date = st.date_input("End Date", max_value=pd.to_datetime("today"))
+
+# Convert to string for SQL query compatibility
+start_date_str = start_date.strftime('%Y-%m-%d')
+end_date_str = end_date.strftime('%Y-%m-%d')
+
+# Query DuckDB for historical data within the selected date range
+query = f"""
+SELECT * FROM kafka_data
+WHERE arrival_timestamp BETWEEN '{start_date_str}' AND '{end_date_str}'
+"""
+df_historical = conn.execute(query).fetchdf()
+
+# Show the historical data (if any)
+if not df_historical.empty:
+    st.subheader(f"Historical Data from {start_date_str} to {end_date_str}")
+    st.dataframe(df_historical)
+
+else:
+    st.warning("No data found for the selected date range.")
+
+#######################################
+# REAL-TIME KAFKA DATA FILTERING BY DATE
+#######################################
+
+# Date range selection for real-time Kafka data
+st.subheader("Filter Real-Time Kafka Data by Date Range")
+
+# Convert message arrival timestamp to datetime for filtering
+filtered_kafka_data = [
+    msg for msg in message_data if start_date <= pd.to_datetime(msg['arrival_timestamp']).date() <= end_date
+]
+filtered_df = pd.DataFrame(filtered_kafka_data)
+
+# Display filtered real-time Kafka data
+if not filtered_df.empty:
+    st.subheader(f"Real-Time Data from {start_date_str} to {end_date_str}")
+    st.dataframe(filtered_df)
+else:
+    st.warning("No real-time data found for the selected date range.")
 
 #######################################
 # DATA UPLOAD - Sidebar
