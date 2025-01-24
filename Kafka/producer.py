@@ -39,8 +39,6 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
                 chunk = batch.to_pandas()  # Convert to Pandas DataFrame
                 send_to_kafka(producer, TOPIC_NAME, chunk)
                 print(f"Batch {i} sent to Kafka successfully.")
-                if i == 1:
-                    break
     except Exception as e:
         print(f"Error: {e}")
     finally:
@@ -50,7 +48,7 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
 
 def main():
     # Sample input
-    parquet_file = 'sample_0.001.parquet'  # Parquet file name
+    parquet_file = 'sample_0.001.parquet'  # Parquet file name (or CSV?)
     batch_size = 5  # Batch size
 
     stream_parquet_to_kafka(parquet_file, batch_size)
