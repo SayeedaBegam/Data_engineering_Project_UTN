@@ -58,9 +58,10 @@ CREATE TABLE IF NOT EXISTS kafka_data (
 # KAFKA CONSUMER (Replacing File Upload)
 #######################################
 
-# Kafka Consumer Setup
-KAFKA_SERVER = 'localhost:9092'  # Kafka server address
-KAFKA_TOPIC = 'your_topic_name'  # Replace with your Kafka topic
+# Define Kafka settings (you can adjust these values as per your Kafka setup)
+KAFKA_TOPIC = 'your_topic_name'
+KAFKA_SERVER = 'localhost:9092'
+
 consumer = KafkaConsumer(
     KAFKA_TOPIC,
     bootstrap_servers=KAFKA_SERVER,

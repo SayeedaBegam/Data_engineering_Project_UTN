@@ -5,7 +5,7 @@ from collections import deque
 # Kafka settings
 KAFKA_BROKER = 'localhost:9092'  # Address of the Kafka broker
 TOPIC_NAME = 'parquet-stream'    # Kafka topic name
-TOPIC_COMPILE_DURATION = 'compile_duration_sort' # topic for compile_duration
+TOPIC_COMPILE_DURATION = 'compile_duration_sort'  # Kafka topic name for sorted durations
 MAX_MESSAGES = 10  # Maximum number of messages to keep in memory
 
 def main():
@@ -13,6 +13,7 @@ def main():
     consumer = KafkaConsumer(
         TOPIC_NAME,
         bootstrap_servers=KAFKA_BROKER,
+        group_id='raw data',
         auto_offset_reset='earliest',  # Read data from the beginning
         enable_auto_commit=True,       # Automatically commit offsets
         value_deserializer=lambda x: json.loads(x.decode('utf-8'))  # Deserialize in JSON format
@@ -59,8 +60,9 @@ def main():
             print(f"Updated queue: {list(message_queue)}")
 
             # Produce the sorted values back to the topic
-            for duration in message_queue:
-                producer.send(TOPIC_COMPILE_DURATION, value={"compile_duration_ms": duration})
+            # for duration in message_queue:
+            producer.send(TOPIC_COMPILE_DURATION, value={"compile_duration_ms": list(message_queue)})
+            print(f"Sending message to topic '{TOPIC_COMPILE_DURATION}': {list(message_queue)}")
 
             producer.flush()
 
@@ -68,6 +70,7 @@ def main():
         print("\nStopping consumer...")
     finally:
         consumer.close()
+        producer.close()
 
 
 if __name__ == '__main__':
