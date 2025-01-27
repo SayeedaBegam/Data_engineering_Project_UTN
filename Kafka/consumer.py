@@ -1,77 +1,76 @@
-from kafka import KafkaConsumer, KafkaProducer
+from confluent_kafka import Consumer, Producer
 import json
-from collections import deque
 
 # Kafka settings
-KAFKA_BROKER = 'localhost:9092'  # Address of the Kafka broker
-TOPIC_NAME = 'parquet-stream'    # Kafka topic name
+KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
+TOPIC_RAW_DATA = 'parquet-stream'  # Kafka topic name
 TOPIC_COMPILE_DURATION = 'compile_duration_sort'  # Kafka topic name for sorted durations
+TOPIC_QUERY_COUNTER = 'query_counter'  # Kafka topic name for query counters
 MAX_MESSAGES = 10  # Maximum number of messages to keep in memory
+
+def create_consumer(topic, group_id):
+    """Create a Confluent Kafka Consumer."""
+    return Consumer({
+        'bootstrap.servers': KAFKA_BROKER,
+        'group.id': group_id,
+        'auto.offset.reset': 'earliest',  # Start reading from the beginning
+        'enable.auto.commit': True       # Automatically commit offsets
+    }, logger=None)
 
 def main():
     # Kafka Consumer settings
-    consumer = KafkaConsumer(
-        TOPIC_NAME,
-        bootstrap_servers=KAFKA_BROKER,
-        group_id='raw data',
-        auto_offset_reset='earliest',  # Read data from the beginning
-        enable_auto_commit=True,       # Automatically commit offsets
-        value_deserializer=lambda x: json.loads(x.decode('utf-8'))  # Deserialize in JSON format
-    )
+    consumer_raw_data = create_consumer(TOPIC_RAW_DATA, 'raw_data')
+    consumer_compile_duration = create_consumer(TOPIC_COMPILE_DURATION, 'live_analytics')
+    consumer_query_counter = create_consumer(TOPIC_QUERY_COUNTER, 'live_analytics')
+
+    # Subscribe consumers to their respective topics
+    consumer_raw_data.subscribe([TOPIC_RAW_DATA])
+    consumer_compile_duration.subscribe([TOPIC_COMPILE_DURATION])
+    consumer_query_counter.subscribe([TOPIC_QUERY_COUNTER])
 
     # Kafka Producer settings
-    producer = KafkaProducer(
-        bootstrap_servers=KAFKA_BROKER,
-        value_serializer=lambda x: json.dumps(x).encode('utf-8')
-    )
+    producer = Producer({
+        'bootstrap.servers': KAFKA_BROKER
+    })
 
-    print(f"Listening for messages on topic '{TOPIC_NAME}'...")
-
-    # Use a deque to store compile_duration_ms values
-    message_queue = deque()
+    print(f"Listening for messages on topic '{TOPIC_RAW_DATA}'...")
 
     try:
-        for message in consumer:
-            data = message.value
-            compile_duration = data.get('compile_duration_ms')
+        while True:
+            # Poll messages from consumers
+            raw_msg = consumer_raw_data.poll(timeout=1.0)
+            compile_msg = consumer_compile_duration.poll(timeout=1.0)
+            query_msg = consumer_query_counter.poll(timeout=1.0)
 
-            # Skip if compile_duration_ms is missing or not a number
-            if compile_duration is None or not isinstance(compile_duration, (int, float)):
-                print(f"Skipping invalid message: {data}")
-                continue
+            # Handle messages from the raw data topic
+            if raw_msg is not None and not raw_msg.error():
+                message_value = json.loads(raw_msg.value().decode('utf-8'))
+                print(f"Received from {TOPIC_RAW_DATA}: {message_value}")
 
-            # Insert the new compile_duration_ms value in sorted order (descending)
-            inserted = False
-            for i, value in enumerate(message_queue):
-                if compile_duration > value:
-                    message_queue.insert(i, compile_duration)
-                    inserted = True
-                    break
+            # Handle messages from the compile duration topic
+            if compile_msg is not None and not compile_msg.error():
+                message_value = json.loads(compile_msg.value().decode('utf-8'))
+                print(f"Received from {TOPIC_COMPILE_DURATION}: {message_value}")
 
-            if not inserted:
-                message_queue.append(compile_duration)
+            # Handle messages from the query counter topic
+            if query_msg is not None and not query_msg.error():
+                message_value = json.loads(query_msg.value().decode('utf-8'))
+                print(f"Received from {TOPIC_QUERY_COUNTER}: {message_value}")
 
-            # If queue exceeds MAX_MESSAGES, remove the smallest value
-            if len(message_queue) > MAX_MESSAGES:
-                removed_value = message_queue.pop()
-                print(f"Queue exceeded max size. Removed smallest value: {removed_value}")
-
-            # Print the updated queue
-            print(f"Updated queue: {list(message_queue)}")
-
-            # Produce the sorted values back to the topic
-            # for duration in message_queue:
-            producer.send(TOPIC_COMPILE_DURATION, value={"compile_duration_ms": list(message_queue)})
-            print(f"Sending message to topic '{TOPIC_COMPILE_DURATION}': {list(message_queue)}")
-
+            # Simulate sending a message (if needed)
+            # Example: Sending processed data back to Kafka
+            example_data = {"example_key": "example_value"}
+            producer.produce(TOPIC_RAW_DATA, value=json.dumps(example_data))
             producer.flush()
-
+            
     except KeyboardInterrupt:
         print("\nStopping consumer...")
     finally:
-        consumer.close()
-        producer.close()
-
+        # Close consumers and producer
+        consumer_raw_data.close()
+        consumer_compile_duration.close()
+        consumer_query_counter.close()
+        producer.flush()
 
 if __name__ == '__main__':
     main()
