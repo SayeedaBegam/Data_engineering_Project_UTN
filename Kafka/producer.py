@@ -1,18 +1,46 @@
 import pandas as pd
 from confluent_kafka import Producer, Consumer
+from confluent_kafka.admin import AdminClient, NewTopic
 import json
 import pyarrow.parquet as pq
 import time
 from collections import deque
+from ksql import KSQLAPI
+import requests
+import ddb_wrappers as ddb
 
-# Start zookeper server: bin/zookeeper-server-start.sh config/zookeeper.properties
-# Start Kafka server: bin/kafka-server-start.sh config/server.properties
-# Kafka configuration
+# Start zookeper server: bin/zookeeper-server-start etc/kafka/zookeeper.properties
+# Start Kafka server: bin/kafka-server-start etc/kafka/server.properties
+# Start ksql db: bin/ksql-server-start etc/ksqldb/ksql-server.properties
+# 
+# # Kafka configuration
 KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
-TOPIC_RAW_DATA = 'parquet-stream'  # Kafka topic name
-TOPIC_COMPILE_DURATION = 'compile_duration_sort'  # Kafka topic name for sorted durations
-TOPIC_QUERY_COUNTER = 'query_counter'  # Kafka topic name for sorted durations
-MAX_MESSAGES = 10  # Maximum number of messages to keep in memory
+TOPIC_RAW_DATA = 'parquet_stream'  # Kafka topic name
+TOPIC_CLEAN_DATA = 'clean_data'
+TOPIC_QUERY_METRICS = 'query_metrics'  # Kafka topic name for sorted durations
+TOPIC_COMPILE_METRICS = 'compile_metrics'  # Kafka topic name for sorted durations
+TOPIC_LEADERBOARD= 'leaderboard'
+TOPIC_STRESS_INDEX = 'stressindex'
+
+LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
+QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
+COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations', 'mbytes_spilled']
+STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
+                  'compile_duration_ms','execution_duration_ms',
+                  'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
+
+QUERY_METRIC_COLUMNS = [
+'query_type',
+'num_permanent_tables_accessed',
+'num_external_tables_accessed',
+'num_system_tables_accessed',
+'read_table_ids',
+'write_table_ids',
+'mbytes_scanned',
+'mbytes_spilled',
+'num_joins',
+'num_scans',
+'num_aggregations']
 
 def send_to_kafka(producer, topic, chunk):
     """Send data to Kafka"""
@@ -36,13 +64,8 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
         'linger.ms': 10,
     }
     producer = Producer(producer_config)
-
-    message_queue = deque()
-    query_counter = {
-        'total': 0,
-        'aborted': 0,
-        'cached': 0
-    }
+    #producer2 = Producer(producer_config)
+    #producer3 = Producer(producer_config)
 
     print(f"Streaming Parquet file '{parquet_file}' to Kafka topic '{TOPIC_RAW_DATA}' with batch size {batch_size}...")
     df = pd.read_parquet(parquet_file)
@@ -53,8 +76,11 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
         try:
             send_to_kafka(producer, TOPIC_RAW_DATA, batch)
             print(f"Batch {batch_id} sent to Kafka successfully.")
-            analyze_compile_time(producer, batch, message_queue)
-            analyze_query_counter(producer, batch, query_counter)
+            ddb.write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
+            ddb.write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
+            ddb.write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
+            ddb.write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
+            #ddb.purge_kafka_topic(TOPIC_QUERY_COUNTER,KAFKA_BROKER)
         except Exception as e:
             print(f"Error: {e}")
         print("Finished streaming data to Kafka.")
@@ -75,53 +101,9 @@ def delay_stream(batch_start, next_batch_start):
     min_delay = 0.25
     time.sleep(max(delay, min_delay))
 
-def analyze_compile_time(producer, batch, message_queue):
-    try:
-        compile_durations = batch['compile_duration_ms'].dropna().tolist()
-        for duration in compile_durations:
-            if duration is None or not isinstance(duration, (int, float)):
-                continue
-
-            # Insert the new compile_duration_ms value in sorted order (descending)
-            inserted = False
-            for i, value in enumerate(message_queue):
-                if duration > value:
-                    message_queue.insert(i, duration)
-                    inserted = True
-                    break
-
-            if not inserted:
-                message_queue.append(duration)
-            # If queue exceeds MAX_MESSAGES, remove the smallest value
-            if len(message_queue) > MAX_MESSAGES:
-                message_queue.pop()
-
-            # Produce the sorted values back to the topic
-            producer.produce(TOPIC_COMPILE_DURATION, value=json.dumps({"compile_duration_ms": list(message_queue)}))
-    except Exception as e:
-        print(f"Error: {e}")
-
-def analyze_query_counter(producer, batch, counter):
-    try:
-        aborted = 0
-        cached = 0
-        total = 0
-
-        for _, row in batch.iterrows():
-            total += 1
-            if row['was_cached'] == 1:
-                cached += 1
-            if row['was_aborted'] == 1:
-                aborted += 1
-
-        counter['total'] += total
-        counter['aborted'] += aborted
-        counter['cached'] += cached
-        producer.produce(TOPIC_QUERY_COUNTER, value=json.dumps(counter))
-    except Exception as e:
-        print(f"Error: {e}")
 
 def main():
+
     parquet_file = 'sample_0.001.parquet'  # Parquet file name
     batch_size = 2  # Batch size
 
