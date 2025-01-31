@@ -250,9 +250,8 @@ def parquet_to_table(consumer, table, conn, columns,topic):
 
     # Load into DuckDB
     conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
-
+    consumer.commit(asynchronous=False) #commits offset to ensure that only new data is written to
     print(f"✅ Successfully loaded {len(df)} rows into {table}.")
-    purge_kafka_topic(topic)
 
 def check_duckdb_table(table_name, conn):
     """
@@ -413,7 +412,6 @@ def build_live_query_distribution(con):
     """).df()
     return df
 
-
 def build_live_compile_metrics(con):
     '''
     PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
@@ -432,7 +430,6 @@ def build_live_compile_metrics(con):
     """).df()
     return df
 
-
 def build_live_compile_metrics(con):
     '''
     PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
@@ -450,7 +447,6 @@ def build_live_compile_metrics(con):
     FROM LIVE_COMPILE_METRICS;
     """).df()
     return df
-
 
 def build_live_spilled_scanned(con):
     '''
