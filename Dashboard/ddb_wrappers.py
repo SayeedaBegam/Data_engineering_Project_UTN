@@ -101,7 +101,6 @@ def create_kafka_topic(topic_name, num_partitions, replication_factor):
     except Exception as e:
         print(f"Error creating topic '{topic_name}': {e}")
 
-
 def create_consumer(topic, group_id):
     """Create a Confluent Kafka Consumer."""
     consumer_t = Consumer({
@@ -230,7 +229,7 @@ def parquet_to_table(consumer, table, conn, columns,topic):
                 records = [records]
 
             data_list.extend(records)
-        
+            last_msg = msg   
         except json.JSONDecodeError as e:
             print(f"Error decoding JSON: {e}")
 
@@ -248,12 +247,14 @@ def parquet_to_table(consumer, table, conn, columns,topic):
     # Save as Parquet
     df.to_parquet(parquet_file, index=False)
 
+    ## SELECT FORM PARUQET DELETE WHERE 
+
     # Get absolute path for DuckDB compatibility
     parquet_path = os.path.abspath(parquet_file)
 
     # Load into DuckDB
     conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
-    consumer.commit(asynchronous=False) #commits offset to ensure that only new data is written to
+    consumer.commit(message=last_msg,asynchronous=False) #commits offset to ensure that only new data is written to
     print(f"✅ Successfully loaded {len(df)} rows into {table}.")
 
 def check_duckdb_table(table_name, conn):
@@ -350,7 +351,7 @@ def build_leaderboard_compiletime(con):
     ARGS:
         con: duckdb connected cursor
     '''
-    time.sleep(.5)
+    #time.sleep(.5)
     df1 = con.execute(f"""
     SELECT 
     instance_id, 

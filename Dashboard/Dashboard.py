@@ -160,9 +160,9 @@ def create_consumer(topic, group_id):
     consumer_t = Consumer({
         'bootstrap.servers': KAFKA_BROKER,
         'group.id': group_id,
-        'auto.offset.reset': 'earliest',  # Start reading from the beginning
-        'enable.auto.commit': True       # Automatically commit offsets
-    }, logger=None)
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found, useful if consumer crashes
+        'enable.auto.commit': False        # Disable auto commit, ensure 
+    })
     consumer_t.subscribe([topic])
     return consumer_t
 
@@ -178,13 +178,13 @@ def Kafka_topic_to_DuckDB():
 
     print(f"Listening for messages on topic '{TOPIC_RAW_DATA}'...")
 
-    placeholder = st.empty()
+    query_counter_table = st.empty()
 
     try:
         while True:
             ddb.parquet_to_table(consumer_query_counter,'LIVE_QUERY_METRICS',con, QUERY_COLUMNS,TOPIC_QUERY_METRICS)
             # display function 
-            live_view_graphs(placeholder)
+            live_view_graphs(query_counter_table)
             time.sleep(5)
             ddb.check_duckdb_table('LIVE_QUERY_METRICS',con)
 
@@ -199,23 +199,16 @@ def Kafka_topic_to_DuckDB():
 
 
 ########### DuckDB to Dashboard ################
-def live_view_graphs(placeholder):
-
+def live_view_graphs(query_counter):
     try:
         # Fetch real-time sorted data
         con = duckdb.connect(DUCKDB_FILE)
         df = ddb.build_live_query_counts(con)
         con.close()
-        placeholder.dataframe(df)
+        query_counter.dataframe(df)
 
     except KeyboardInterrupt:
         st.warning("Stream ended!")
-
-
-
-
-
-
 
 # Show content based on the selected view mode
 if view_mode == "Historical View":
