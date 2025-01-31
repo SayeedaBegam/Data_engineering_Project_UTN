@@ -27,7 +27,7 @@ TOPIC_STRESS_INDEX = 'stressindex'
 
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
-COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations', 'mbytes_spilled']
+COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
 STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
                   'compile_duration_ms','execution_duration_ms',
                   'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
@@ -75,6 +75,7 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
     df = df.sort_values(by='arrival_timestamp').reset_index(drop=True)
     df['arrival_timestamp'] = pd.to_datetime(df['arrival_timestamp'])
     df['batch_id'] = (df.index // batch_size)  # BatchIDs used to group data
+    type_cast_batch(df)
     for batch_id, batch in df.groupby('batch_id'):
         try:
             send_to_kafka(producer, TOPIC_RAW_DATA, batch)
@@ -104,9 +105,51 @@ def delay_stream(batch_start, next_batch_start):
     min_delay = 0.25
     time.sleep(max(delay, min_delay))
 
+def type_cast_batch(batch):
+    """
+    Type casts a Pandas DataFrame according to the predefined schema.
+    
+    :param batch: Pandas DataFrame containing the required columns.
+    :return: Type-casted DataFrame
+    """
+    # Define the expected data types
+    dtype_mapping = {
+        "instance_id": "Int64",
+        "cluster_size": "float64",
+        "user_id": "Int64",
+        "database_id": "Int64",
+        "query_id": "Int64",
+        "arrival_timestamp": "datetime64[ns]",
+        "compile_duration_ms": "float64",
+        "queue_duration_ms": "Int64",
+        "execution_duration_ms": "Int64",
+        "feature_fingerprint": "string",
+        "was_aborted": "boolean",
+        "was_cached": "boolean",
+        "cache_source_query_id": "float64",
+        "query_type": "string",
+        "num_permanent_tables_accessed": "float64",
+        "num_external_tables_accessed": "float64",
+        "num_system_tables_accessed": "float64",
+        "read_table_ids": "string",
+        "write_table_ids": "float64",
+        "mbytes_scanned": "float64",
+        "mbytes_spilled": "float64",
+        "num_joins": "Int64",
+        "num_scans": "Int64",
+        "num_aggregations": "Int64",
+        "batch_id": "Int64",
+    }
+
+    # Convert data types
+    for column, dtype in dtype_mapping.items():
+        if dtype == "datetime64[ns]":
+            batch[column] = pd.to_datetime(batch[column], errors='coerce')  # Handle invalid timestamps
+        else:
+            batch[column] = batch[column].astype(dtype)
+
 
 def main():
-
     parquet_file = 'sample_0.001.parquet'  # Parquet file name
     batch_size = 2  # Batch size
 
