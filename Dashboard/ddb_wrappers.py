@@ -101,14 +101,17 @@ def create_kafka_topic(topic_name, num_partitions, replication_factor):
     except Exception as e:
         print(f"Error creating topic '{topic_name}': {e}")
 
+
 def create_consumer(topic, group_id):
     """Create a Confluent Kafka Consumer."""
-    return Consumer({
+    consumer_t = Consumer({
         'bootstrap.servers': KAFKA_BROKER,
         'group.id': group_id,
-        'auto.offset.reset': 'earliest',  # Start reading from the beginning
-        'enable.auto.commit': True       # Automatically commit offsets
-    }, logger=None)
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found, useful if consumer crashes
+        'enable.auto.commit': False        # Disable auto commit, ensure 
+    })
+    consumer_t.subscribe([topic])
+    return consumer_t
 
 def create_all_topics():
     create_kafka_topic('durations', num_partitions = 3)
