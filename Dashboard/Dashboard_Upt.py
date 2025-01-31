@@ -12,7 +12,8 @@ import time
 from datetime import datetime, timedelta
 import random
 import ddb_wrappers as ddb
-
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Set up the page layout
 st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
@@ -263,142 +264,208 @@ def Kafka_topic_to_DuckDB():
 
 
 ########### DuckDB to Dashboard ################
-def live_view_graphs(query_counter):
-    try:
-        # Fetch real-time sorted data
-        con = duckdb.connect(DUCKDB_FILE)
-        df = ddb.build_live_query_counts(con)
-        con.close()
-        query_counter.dataframe(df)
+import plotly.graph_objects as go
 
-        # Adding Query Counter Table with Styling
-        query_counter.dataframe(df.style.set_table_styles([
-            {'selector': 'thead', 'props': [('background-color', '#4CAF50'), ('color', 'white')]},
-            {'selector': 'tbody', 'props': [('background-color', '#fafafa')]},
-            {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f9f9f9')]},
-            {'selector': 'th', 'props': [('font-size', '16px'), ('font-weight', 'bold')]},
-            {'selector': 'td', 'props': [('font-size', '14px')]}
-        ]))
-    except KeyboardInterrupt:
-        st.warning("Stream ended!")
+def build_leaderboard_compiletime(con):
+    '''
+    PREREQUISITES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
+    con,LEADERBOARD_COLUMNS,TOPIC_LEADERBOARD) has already been called
+    
+    returns dataframe containing top 10 compile times and their instance_id
+    '''
+    df1 = con.execute(f"""
+    SELECT 
+    instance_id, 
+    FLOOR(compile_duration_ms / 60000) || ':' || LPAD(FLOOR((compile_duration_ms % 60000) / 1000), 2, '0') AS compile_duration
+    FROM LIVE_LEADERBOARD
+    ORDER BY compile_duration_ms DESC
+    LIMIT 10;
+    """).df()
 
+    # Visualization: Horizontal Bar Chart using Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=df1['instance_id'],
+        x=df1['compile_duration'],
+        orientation='h',  # Horizontal bar
+        marker=dict(color='royalblue'),
+        text=df1['compile_duration'],
+        textposition='inside'
+    ))
 
-def leaderboard_view(leaderboard_container):
-    try:
-        # Fetch real-time data for leaderboard
-        con = duckdb.connect(DUCKDB_FILE)
-        df = ddb.build_leaderboard(con)  # Fetch leaderboard data
-        con.close()
+    fig.update_layout(
+        title='Top 10 Compile Times',
+        xaxis_title='Compile Duration (mm:ss)',
+        yaxis_title='Instance ID',
+        template='plotly_dark'
+    )
+    fig.show()
 
-        st.markdown("<h3 class='leaderboard-header'>Leaderboard (Top 10)</h3>", unsafe_allow_html=True)
-        leaderboard_data = leaderboard_data.style.set_table_styles([
-            {'selector': 'thead', 'props': [('background-color', '#4CAF50'), ('color', 'white')]},
-            {'selector': 'tbody', 'props': [('background-color', '#fafafa')]},
-            {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f9f9f9')]},
-            {'selector': 'th', 'props': [('font-size', '16px'), ('font-weight', 'bold')]},
-            {'selector': 'td', 'props': [('font-size', '14px')]}
-        ])
-        st.dataframe(leaderboard_data)
+def build_leaderboard_user_queries(con):
+    '''
+    PREREQUISITES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
+    con,LEADERBOARD_COLUMNS,TOPIC_LEADERBOARD) has already been called
+    
+    returns dataframe containing top 5 user_ids who issued the most queries
+    '''
+    df = con.execute(f"""
+                       SELECT user_id, COUNT(*) as most_queries
+                       FROM LIVE_LEADERBOARD
+                       GROUP BY user_id
+                       ORDER BY most_queries DESC
+                       LIMIT 5;
+                       """).df()
 
-    except KeyboardInterrupt:
-        st.warning("Stream ended!")
+    # Visualization: Vertical Bar Chart using Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df['user_id'],
+        y=df['most_queries'],
+        marker=dict(color='green'),
+        text=df['most_queries'],
+        textposition='auto'
+    ))
 
-
-def live_query_distribution(query_distribution):
-    try:
-        # Fetch real-time data for live query distribution
-        con = duckdb.connect(DUCKDB_FILE)
-        df = ddb.build_live_query_distribution(con)
-        con.close()
-
-        # Adding Query Distribution Table with Styling
-        st.markdown("<h3>Query Distribution</h3>", unsafe_allow_html=True)
-        query_distribution_data = query_distribution_data.style.set_table_styles([
-            {'selector': 'thead', 'props': [('background-color', '#4CAF50'), ('color', 'white')]},
-            {'selector': 'tbody', 'props': [('background-color', '#fafafa')]},
-            {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f9f9f9')]},
-            {'selector': 'th', 'props': [('font-size', '16px'), ('font-weight', 'bold')]},
-            {'selector': 'td', 'props': [('font-size', '14px')]}
-        ])
-        st.dataframe(query_distribution_data)
-
-    except KeyboardInterrupt:
-        st.warning("Stream ended!")
-
-
-def live_compile_metrics(compile_metrics):
-    try:
-        # Fetch real-time data for live compile metrics
-        con = duckdb.connect(DUCKDB_FILE)
-        df = ddb.build_live_compile_metrics(con)
-        con.close()
-
-        st.markdown("<h3>Compile Metrics</h3>", unsafe_allow_html=True)
-        compile_metrics_data = compile_metrics_data.style.set_table_styles([
-            {'selector': 'thead', 'props': [('background-color', '#4CAF50'), ('color', 'white')]},
-            {'selector': 'tbody', 'props': [('background-color', '#fafafa')]},
-            {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f9f9f9')]},
-            {'selector': 'th', 'props': [('font-size', '16px'), ('font-weight', 'bold')]},
-            {'selector': 'td', 'props': [('font-size', '14px')]}
-        ])
-        st.dataframe(compile_metrics_data)
-
-    except KeyboardInterrupt:
-        st.warning("Stream ended!")
+    fig.update_layout(
+        title='Top 5 Users by Query Count',
+        xaxis_title='User ID',
+        yaxis_title='Query Count',
+        template='plotly_dark'
+    )
+    fig.show()
 
 
-def live_spilled_scanned_data(spilled_scanned_data):
-    try:
-        # Fetch real-time data for live spilled and scanned data
-        con = duckdb.connect(DUCKDB_FILE)
-        df = ddb.build_live_spilled_scanned(con)
-        con.close()
+def build_live_query_counts(con):
+    '''
+    PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    
+    returns dataframe containing total, aborted, and cached query counts
+    '''
+    df = con.execute(f"""
+    SELECT 
+    COUNT(*) AS total_queries,
+    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
+    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
+    FROM LIVE_QUERY_METRICS;
+    """).df()
 
-        st.markdown("<h3>Spilled and Scanned Data</h3>", unsafe_allow_html=True)
-        spilled_scanned_data = spilled_scanned_data.style.set_table_styles([
-            {'selector': 'thead', 'props': [('background-color', '#4CAF50'), ('color', 'white')]},
-            {'selector': 'tbody', 'props': [('background-color', '#fafafa')]},
-            {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f9f9f9')]},
-            {'selector': 'th', 'props': [('font-size', '16px'), ('font-weight', 'bold')]},
-            {'selector': 'td', 'props': [('font-size', '14px')]}
-        ])
-        st.dataframe(spilled_scanned_data)
+    # Visualization: Pie Chart using Plotly
+    fig = go.Figure(data=[go.Pie(
+        labels=['Total Queries', 'Aborted Queries', 'Cached Queries'],
+        values=[df['total_queries'][0], df['aborted_queries'][0], df['cached_queries'][0]],
+        hole=0.3,  # makes it a donut chart
+        marker=dict(colors=['#007bff', '#ff4c4c', '#00cc99'])
+    )])
 
-    except KeyboardInterrupt:
-        st.warning("Stream ended!")
+    fig.update_layout(
+        title='Query Distribution (Total, Aborted, Cached)',
+        template='plotly_dark'
+    )
+    fig.show()
+
+def build_live_query_distribution(con):
+    '''
+    PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    
+    returns dataframe containing counts of total, aborted, and cached queries
+    '''
+    df = con.execute(f"""
+    SELECT 
+    COUNT(*) AS total_queries,
+    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
+    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
+    FROM LIVE_QUERY_METRICS;
+    """).df()
+
+    # Visualization: Stacked Bar Chart using Plotly
+    fig = go.Figure(data=[
+        go.Bar(name='Total Queries', x=['Queries'], y=[df['total_queries'][0]], marker=dict(color='#007bff')),
+        go.Bar(name='Aborted Queries', x=['Queries'], y=[df['aborted_queries'][0]], marker=dict(color='#ff4c4c')),
+        go.Bar(name='Cached Queries', x=['Queries'], y=[df['cached_queries'][0]], marker=dict(color='#00cc99'))
+    ])
+
+    fig.update_layout(
+        title='Query Distribution (Total, Aborted, Cached)',
+        barmode='stack',
+        xaxis_title='Query Type',
+        yaxis_title='Query Count',
+        template='plotly_dark'
+    )
+    fig.show()
+
+def build_live_compile_metrics(con):
+    '''
+    PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    
+    returns dataframe containing sum of scans, aggregates, and joins
+    '''
+    df = con.execute(f"""
+    SELECT 
+    SUM(num_scans) AS total_scans,
+    SUM(num_aggregates) AS total_aggregates,
+    SUM(num_join) AS total_joins
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+
+    # Visualization: Stacked Bar Chart using Plotly
+    fig = go.Figure(data=[
+        go.Bar(name='Scans', x=['Metrics'], y=[df['total_scans'][0]], marker=dict(color='blue')),
+        go.Bar(name='Aggregates', x=['Metrics'], y=[df['total_aggregates'][0]], marker=dict(color='orange')),
+        go.Bar(name='Joins', x=['Metrics'], y=[df['total_joins'][0]], marker=dict(color='green'))
+    ])
+
+    fig.update_layout(
+        title='Compile Metrics (Scans, Aggregates, Joins)',
+        barmode='stack',
+        xaxis_title='Metric Type',
+        yaxis_title='Count',
+        template='plotly_dark'
+    )
+    fig.show()
 
 
+def build_live_spilled_scanned(con):
+    '''
+    PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    
+    returns dataframe containing sum of spilled and scanned data
+    '''
+    df = con.execute(f"""
+    SELECT 
+    SUM(mb_spilled) AS mb_spilled,
+    SUM(mb_scanned) AS mb_scanned
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
 
-# Show content based on the selected view mode
-if view_mode == "Historic View":
-    # Arrange Query Counter and Leaderboard in Parallel (Side-by-Side) Layout
-    col1, col2 = st.columns(2) 
+    # Visualization: Dual-Axis Bar Chart using Plotly
+    fig = go.Figure()
 
-    with col1:
-        # Display query counter in the first column
-        query_counter_table = st.empty()  # Placeholder for the query counter table
-        Kafka_topic_to_DuckDB()  # Call function to update the query counter table
+    fig.add_trace(go.Bar(
+        x=['Spilled vs Scanned'],
+        y=[df['mb_spilled'][0]],
+        name='Spilled (MB)',
+        marker=dict(color='red')
+    ))
 
-    with col2:
-        # Display the leaderboard in the second column
-        st.markdown("<h3 class='leaderboard-header'>Leaderboard</h3>", unsafe_allow_html=True)
-        leaderboard_data = ddb.build_leaderboard()  
-        st.write(leaderboard_data)
+    fig.add_trace(go.Bar(
+        x=['Spilled vs Scanned'],
+        y=[df['mb_scanned'][0]],
+        name='Scanned (MB)',
+        marker=dict(color='blue')
+    ))
 
-elif view_mode == "Live View":
-    # Arrange Query Counter and Leaderboard in Parallel (Side-by-Side) Layout
-    col1, col2 = st.columns(2)  
-
-    with col1:
-        # Display query counter in the first column for live view
-        query_counter_table = st.empty()  
-        Kafka_topic_to_DuckDB()  
-
-    with col2:
-        # Display the leaderboard in the second column for live view
-        st.markdown("<h3 class='leaderboard-header'>Leaderboard</h3>", unsafe_allow_html=True)
-        leaderboard_data = ddb.build_leaderboard()  
-        st.write(leaderboard_data)
+    fig.update_layout(
+        title='Data Spilled vs Data Scanned',
+        barmode='group',
+        xaxis_title='Metrics',
+        yaxis_title='MB',
+        template='plotly_dark'
+    )
+    fig.show()
 
 # Footer: 
 st.markdown("""
