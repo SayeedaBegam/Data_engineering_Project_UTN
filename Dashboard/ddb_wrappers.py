@@ -24,7 +24,7 @@ TOPIC_STRESS_INDEX = 'stressindex'
 
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
-COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations', 'mbytes_spilled']
+COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
 STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
                   'compile_duration_ms','execution_duration_ms',
                   'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
@@ -338,7 +338,6 @@ def analyze_query_counter(producer, batch, counter):
     except Exception as e:
         print(f"Error: {e}")
 
-
 def build_leaderboard_compiletime(con):
     '''
     PREREQUISITIES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
@@ -395,3 +394,78 @@ def build_live_query_counts(con):
     FROM LIVE_QUERY_METRICS;
     """).df()
     return df
+
+def build_live_query_distribution(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe unique instances of query typesa nd the counts
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    COUNT(*) AS total_queries,
+    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
+    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
+    FROM LIVE_QUERY_METRICS;
+    """).df()
+    return df
+
+
+def build_live_compile_metrics(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe sum of joins, inserts, and aggregations
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    SUM(num_scans) AS total_scans,
+    SUM(num_aggregates) AS total_aggregates,
+    SUM(num_join) AS total_joins
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+    return df
+
+
+def build_live_compile_metrics(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe sum of joins, inserts, and aggregations
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    SUM(num_scans) AS total_scans,
+    SUM(num_aggregates) AS total_aggregates,
+    SUM(num_join) AS total_joins
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+    return df
+
+
+def build_live_spilled_scanned(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe sum of joins, inserts, and aggregations
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    SUM(mb_spilled) AS mb_spilled,
+    SUM(mb_scanned) AS mb_scanned,
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+    return df
+
