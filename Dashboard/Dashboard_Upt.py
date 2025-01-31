@@ -217,7 +217,30 @@ def initialize_duckdb():
         query_type VARCHAR
     )
     """)
+    # LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
+    con.execute(f"""
+    CREATE TABLE IF NOT EXISTS LIVE_LEADERBOARD (
+        instance_id BIGINT,
+        query_id BIGINT,
+        user_id BIGINT,
+        arrival_timestamp TIMESTAMP,
+        compile_duration_ms DOUBLE,
+    )
+    """)
+    # COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS LIVE_COMPILE_METRICS (
+            instance_id BIGINT,            
+            num_joins BIGINT,
+            num_scans BIGINT,
+            num_aggregations BIGINT,
+            mbytes_scanned DOUBLE,
+            mbytes_spilled DOUBLE,
+        )
+    """)
+    
     con.close()
+
 
 
 def create_consumer(topic, group_id):
@@ -234,11 +257,12 @@ def create_consumer(topic, group_id):
 
 def Kafka_topic_to_DuckDB():
     consumer_raw_data = create_consumer(TOPIC_RAW_DATA, 'raw_data')
-    #consumer_leaderboard = create_consumer(TOPIC_LEADERBOARD, 'live_analytics')
+    consumer_leaderboard = create_consumer(TOPIC_LEADERBOARD, 'live_analytics')
     consumer_query_counter = create_consumer(TOPIC_QUERY_METRICS, 'live_analytics')
-    #consumer_compile = create_consumer(TOPIC_COMPILE_METRICS, 'live_analytics')
+    consumer_compile = create_consumer(TOPIC_COMPILE_METRICS, 'live_analytics')
     #consumer_stress = create_consumer(TOPIC_STRESS_INDEX, 'live_analytics')
     initialize_duckdb()
+
     con = duckdb.connect(DUCKDB_FILE)
 
     print(f"Listening for messages on topic '{TOPIC_RAW_DATA}'...")
@@ -248,18 +272,34 @@ def Kafka_topic_to_DuckDB():
     try:
         while True:
             ddb.parquet_to_table(consumer_query_counter,'LIVE_QUERY_METRICS',con, QUERY_COLUMNS,TOPIC_QUERY_METRICS)
-            # display function 
-            live_view_graphs(query_counter_table)
+            #ddb.parquet_to_table(consumer_leaderboard,'LIVE_LEADERBOARD',con, LEADERBOARD_COLUMNS,TOPIC_LEADERBOARD)
+            #ddb.parquet_to_table(consumer_compile,'LIVE_COMPILE_METRICS',con, COMPILE_COLUMNS,TOPIC_COMPILE_METRICS)
+            #fig1 = build_leaderboard_compiletime(con)
+            #fig2 = build_leaderboard_user_queries(con)
+            fig3 = build_live_query_counts(con)
+            fig4 = build_live_query_distribution(con)
+            #fig5 = build_live_compile_metrics(con)
+            #fig6 = build_live_spilled_scanned(con)
+
+            with query_counter_table:
+                #st.plotly_chart(fig1)
+                #st.plotly_chart(fig2)
+                st.plotly_chart(fig3)
+                st.plotly_chart(fig4)
+                #st.plotly_chart(fig5)
+                #st.plotly_chart(fig6)
+
             time.sleep(5)
+            st.rerun()  # Force Streamlit to re-run so it re-queries and re
             ddb.check_duckdb_table('LIVE_QUERY_METRICS',con)
 
     except KeyboardInterrupt:
         print("\nStopping consumer...")
     finally:
         consumer_raw_data.close()
-        #consumer_leaderboard.close()
+        consumer_leaderboard.close()
         consumer_query_counter.close()
-        #consumer_compile.close()
+        consumer_compile.close()
         #consumer_stress.close()
 
 
@@ -299,7 +339,8 @@ def build_leaderboard_compiletime(con):
         yaxis_title='Instance ID',
         template='plotly_dark'
     )
-    fig.show()
+    #fig.show()
+    return fig
 
 def build_leaderboard_user_queries(con):
     '''
@@ -332,7 +373,8 @@ def build_leaderboard_user_queries(con):
         yaxis_title='Query Count',
         template='plotly_dark'
     )
-    fig.show()
+    #fig.show()
+    return fig
 
 
 def build_live_query_counts(con):
@@ -362,7 +404,8 @@ def build_live_query_counts(con):
         title='Query Distribution (Total, Aborted, Cached)',
         template='plotly_dark'
     )
-    fig.show()
+    #fig.show()
+    return fig
 
 def build_live_query_distribution(con):
     '''
@@ -373,10 +416,11 @@ def build_live_query_distribution(con):
     '''
     df = con.execute(f"""
     SELECT 
-    COUNT(*) AS total_queries,
-    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
-    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
-    FROM LIVE_QUERY_METRICS;
+    query_type, 
+    COUNT(*) AS occurrence_count
+    FROM LIVE_QUERY_METRICS
+    GROUP BY query_type
+    ORDER BY occurrence_count DESC;
     """).df()
 
     # Visualization: Stacked Bar Chart using Plotly
@@ -393,7 +437,8 @@ def build_live_query_distribution(con):
         yaxis_title='Query Count',
         template='plotly_dark'
     )
-    fig.show()
+    #fig.show()
+    return fig
 
 def build_live_compile_metrics(con):
     '''
@@ -424,7 +469,8 @@ def build_live_compile_metrics(con):
         yaxis_title='Count',
         template='plotly_dark'
     )
-    fig.show()
+    #fig.show()
+    return fig
 
 
 def build_live_spilled_scanned(con):
@@ -465,7 +511,14 @@ def build_live_spilled_scanned(con):
         yaxis_title='MB',
         template='plotly_dark'
     )
-    fig.show()
+    #fig.show()
+    return fig
+
+if view_mode == "Historical View":
+    Kafka_topic_to_DuckDB()
+
+elif view_mode == "Live View":
+    Kafka_topic_to_DuckDB()
 
 # Footer: 
 st.markdown("""
