@@ -8,6 +8,9 @@ from collections import deque
 from ksql import KSQLAPI
 import requests
 import ddb_wrappers as ddb
+import duckdb
+DUCKDB_FILE = "data.duckdb"
+
 
 # Start zookeper server: bin/zookeeper-server-start etc/kafka/zookeeper.properties
 # Start Kafka server: bin/kafka-server-start etc/kafka/server.properties
@@ -76,11 +79,11 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
         try:
             send_to_kafka(producer, TOPIC_RAW_DATA, batch)
             print(f"Batch {batch_id} sent to Kafka successfully.")
-            ddb.write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
+            #ddb.write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
             ddb.write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
-            ddb.write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
-            ddb.write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
-            #ddb.purge_kafka_topic(TOPIC_QUERY_COUNTER,KAFKA_BROKER)
+            #ddb.write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
+            #ddb.write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
+
         except Exception as e:
             print(f"Error: {e}")
         print("Finished streaming data to Kafka.")

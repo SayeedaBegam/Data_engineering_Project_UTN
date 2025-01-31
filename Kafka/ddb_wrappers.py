@@ -10,6 +10,8 @@ import requests
 import duckdb
 import os
 
+
+
 DUCKDB_FILE = "data.duckdb"
 
 KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
@@ -29,25 +31,25 @@ STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
 
 def write_to_topic(batch, topic, producer, list_columns):
     try:
-        # Ensure batch is a pandas DataFrame
         if not isinstance(batch, pd.DataFrame):
             raise ValueError("Expected 'batch' to be a pandas DataFrame.")
 
-        # Select only relevant columns, ignoring missing ones
-        selected_columns = batch.loc[:, batch.columns.intersection(list_columns)]
+        # Select only relevant columns
+        selected_columns = batch[list_columns]
 
         if selected_columns.empty:
             print(f"Warning: No relevant columns found for topic '{topic}'.")
             return
         
-        # Convert to JSON format
-        json_payload = selected_columns.to_json(orient='records')
+        # Convert to a list of dictionaries (each row as a JSON object)
+        json_payloads = selected_columns.to_dict(orient='records')
 
-        # Produce the message to Kafka
-        producer.produce(topic, value=json_payload)
+        # Send each record individually
+        for record in json_payloads:
+            producer.produce(topic, value=json.dumps(record))
 
     except Exception as e:
-        print(f"Error creating topic '{topic}': {e}")
+        print(f"Error writing to topic '{topic}': {e}")
 
     finally:
         producer.flush()
@@ -181,7 +183,7 @@ def purge_kafka_topic(topic_name):
 
         # Step 3: Wait a few seconds for Kafka to process deletions
         import time
-        time.sleep(5)
+        time.sleep(1)
 
         # Step 4: Reset retention policy back to default (7 days or desired value)
         config_resource = ConfigResource(ConfigResource.Type.TOPIC, topic_name, {'retention.ms': '604800000'})  # 7 days
@@ -191,12 +193,16 @@ def purge_kafka_topic(topic_name):
     except Exception as e:
         print(f"Error modifying retention policy: {e}")
 
-def parquet_to_table(consumer, table, conn):
-    '''
-    args: Function will take a consumer that already connected to topic
-    table: is a string that will have the name of the table
-    conn: DuckDB connection cursor
-    '''
+def parquet_to_table(consumer, table, conn, columns,topic):
+    """
+    Reads messages from a Kafka consumer, extracts data from JSON, writes to Parquet,
+    and loads into a DuckDB table.
+    
+    Args:
+        consumer: Kafka consumer instance.
+        table: DuckDB table name.
+        conn: DuckDB connection.
+    """
     data_list = []
     parquet_file = "kafka_data.parquet"
     
@@ -211,16 +217,33 @@ def parquet_to_table(consumer, table, conn):
             continue  # Skip errors and keep polling
 
         # Deserialize JSON Kafka message
-        data = json.loads(msg.value().decode('utf-8'))
-        data_list.append(data)
+        message_value = msg.value().decode('utf-8')
+
+        try:
+            # Convert JSON string to dictionary
+            records = json.loads(message_value)
+
+            if isinstance(records, dict):
+                records = [records]
+
+            data_list.extend(records)
+        
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON: {e}")
 
     if not data_list:  # If no data was received, exit function early
         print("No data received from Kafka.")
         return
 
-    # Convert to DataFrame and save as Parquet
     df = pd.DataFrame(data_list)
-    df.to_parquet(parquet_file)
+
+    # Ensure column  (match DuckDB schema)
+
+    df = df[columns]
+
+
+    # Save as Parquet
+    df.to_parquet(parquet_file, index=False)
 
     # Get absolute path for DuckDB compatibility
     parquet_path = os.path.abspath(parquet_file)
@@ -228,7 +251,46 @@ def parquet_to_table(consumer, table, conn):
     # Load into DuckDB
     conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
 
+    print(f"✅ Successfully loaded {len(df)} rows into {table}.")
+    purge_kafka_topic(topic)
 
+def check_duckdb_table(table_name, conn):
+    """
+    Verifies if a table exists and has data in DuckDB.
+    
+    :param table_name: Name of the table to check.
+    :param conn: DuckDB connection object.
+    :return: Tuple (exists, row_count)
+    """
+    try:
+        # Check if the table exists
+        table_exists = conn.execute(
+            f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{table_name}'"
+        ).fetchone()[0] > 0
+
+        if not table_exists:
+            print(f"Table '{table_name}' does NOT exist in DuckDB.")
+            return False, 0
+
+        # Check if the table has data
+        row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+        
+        if row_count > 0:
+            print(f"Table '{table_name}' exists and contains {row_count} rows.")
+            
+            # Optionally show the first few rows
+            df_preview = conn.execute(f"SELECT * FROM {table_name}").df()
+            print("Table Preview:")
+            print(df_preview)
+            
+        else:
+            print(f"Table '{table_name}' exists but is EMPTY.")
+
+        return True, row_count
+
+    except Exception as e:
+        print(f"Error checking table '{table_name}': {e}")
+        return False, 0
 
 def analyze_compile_time(producer, batch, message_queue):
     try:

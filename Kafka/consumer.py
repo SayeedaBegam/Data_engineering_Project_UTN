@@ -1,5 +1,10 @@
 from confluent_kafka import Consumer, Producer
 import json
+import ddb_wrappers as ddb
+import duckdb
+import time
+
+DUCKDB_FILE = "data.duckdb"
 
 # KAFKA SettiNGS AND topics
 KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
@@ -9,6 +14,58 @@ TOPIC_QUERY_METRICS = 'query_metrics'  # Kafka topic name for sorted durations
 TOPIC_COMPILE_METRICS = 'compile_metrics'  # Kafka topic name for sorted durations
 TOPIC_LEADERBOARD= 'leaderboard'
 TOPIC_STRESS_INDEX = 'stressindex'
+LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
+QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
+COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations', 'mbytes_spilled']
+STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
+                  'compile_duration_ms','execution_duration_ms',
+                  'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
+
+
+def initialize_duckdb():
+    """Create a table in DuckDB if it does not exist"""
+    con = duckdb.connect(DUCKDB_FILE)
+    '''
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+            instance_id BIGINT,
+            cluster_size DOUBLE,
+            user_id BIGINT,
+            database_id BIGINT,
+            query_id BIGINT,
+            arrival_timestamp TIMESTAMP,
+            compile_duration_ms DOUBLE,
+            queue_duration_ms BIGINT,
+            execution_duration_ms BIGINT,
+            feature_fingerprint VARCHAR,
+            was_aborted BOOLEAN,
+            was_cached BOOLEAN,
+            cache_source_query_id DOUBLE,
+            query_type VARCHAR,
+            num_permanent_tables_accessed DOUBLE,
+            num_external_tables_accessed DOUBLE,
+            num_system_tables_accessed DOUBLE,
+            read_table_ids VARCHAR,
+            write_table_ids DOUBLE,
+            mbytes_scanned DOUBLE,
+            mbytes_spilled DOUBLE,
+            num_joins BIGINT,
+            num_scans BIGINT,
+            num_aggregations BIGINT,
+            batch_id BIGINT,
+        )
+    """)
+    '''
+    con.execute(f"""
+    CREATE TABLE IF NOT EXISTS LIVE_QUERY_METRICS (
+        instance_id BIGINT,
+        was_aborted BOOLEAN,
+        was_cached BOOLEAN,
+        query_type VARCHAR
+    )
+    """)
+    con.close()
+
 
 def create_consumer(topic, group_id):
     """Create a Confluent Kafka Consumer."""
@@ -27,8 +84,8 @@ def main():
     consumer_query_counter = create_consumer(TOPIC_QUERY_METRICS, 'live_analytics')
     consumer_compile = create_consumer(TOPIC_COMPILE_METRICS, 'live_analytics')
     consumer_stress = create_consumer(TOPIC_STRESS_INDEX, 'live_analytics')
-
-
+    initialize_duckdb()
+    con = duckdb.connect(DUCKDB_FILE)
     producer = Producer({
         'bootstrap.servers': KAFKA_BROKER
     })
@@ -42,7 +99,12 @@ def main():
             query_msg = consumer_query_counter.poll(timeout=1.0)
             compile_msg = consumer_compile.poll(timeout=1.0)
             stress_msg = consumer_stress.poll(timeout=1.0)
+            ddb.parquet_to_table(consumer_query_counter,'LIVE_QUERY_METRICS',con, QUERY_COLUMNS,TOPIC_QUERY_METRICS)
+            time.sleep(5)
+            ddb.check_duckdb_table('LIVE_QUERY_METRICS',con)
+            
 
+            '''
             if raw_msg is not None and not raw_msg.error():
                 message_value = json.loads(raw_msg.value().decode('utf-8'))
                 #print(f"Received from {TOPIC_RAW_DATA}: {message_value}")
@@ -66,7 +128,7 @@ def main():
                 message_value = json.loads(stress_msg.value().decode('utf-8'))
                 print(f"Received from {TOPIC_STRESS_INDEX}: {message_value}")
                 print("Next message \n\n")
-
+            '''
 
 
     except KeyboardInterrupt:
@@ -81,3 +143,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
