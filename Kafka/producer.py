@@ -28,12 +28,13 @@ TOPIC_STRESS_INDEX = 'stressindex'
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
 COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
-STRESS_COLUMNS = ['execution_duration_ms']
+STRESS_COLUMNS = ['execution_duration_ms','mbytes_spilled']
 
 ## Expert Analytics
 
 TOPIC_FLAT_TABLES = 'flattened'
-FLAT_COLUMNS = ['instance_id','query_id','write_table_id','read_table_id','arrival_timestamp','query_table']
+FLAT_COLUMNS = ['instance_id','query_id','write_table_ids','read_table_ids','arrival_timestamp','query_type']
+
 
 
 QUERY_METRIC_COLUMNS = [
@@ -91,7 +92,8 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
             write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
             write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
             write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
-
+            # TESTING
+            #write_to_topic(batch,TOPIC_FLAT_TABLES,producer,FLAT_COLUMNS)
         except Exception as e:
             print(f"Error: {e}")
         print("Finished streaming data to Kafka.")
@@ -155,7 +157,6 @@ def type_cast_batch(batch):
         else:
             batch[column] = batch[column].astype(dtype)
 
-
 def clean_data(batch,producer):
     """
     Cleans a single batch and writes to clean_data topic.
@@ -217,6 +218,7 @@ def write_to_topic(batch, topic, producer, list_columns):
 
         # Send each record individually
         for record in json_payloads:
+            #print(record)
             producer.produce(topic, value=json.dumps(record))
 
     except Exception as e:

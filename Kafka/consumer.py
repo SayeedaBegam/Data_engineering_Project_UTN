@@ -17,11 +17,11 @@ TOPIC_STRESS_INDEX = 'stressindex'
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
 COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
-STRESS_COLUMNS = ['execution_duration_ms']
+STRESS_COLUMNS = ['execution_duration_ms','mbytes_spilled']
 
 ## Expert Analytics
 TOPIC_FLAT_TABLES = 'flattened'
-FLAT_COLUMNS = ['instance_id','query_id','write_table_id','read_table_id','arrival_timestamp','query_table']
+FLAT_COLUMNS = ['instance_id','query_id','write_table_ids','read_table_ids','arrival_timestamp','query_type']
 
 
 def initialize_duckdb():
@@ -66,63 +66,16 @@ def initialize_duckdb():
         query_type VARCHAR
     )
     """)
+    con.execute(f"""
+            CREATE OR REPLACE TABLE flattened_table_ids(
+            instance_id int32,
+            query_id int64,
+            write_table_ids int64,
+            read_table_ids int64,
+            arrival_timestamp timestamp,
+            query_type varchar)
+                """)
     con.close()
-
-import json
-
-def calculate_stress(consumer, long_avg, short_avg):
-    """
-    Reads the latest message from Kafka, updates the running averages, and exits.
-
-    Args:
-        consumer: Kafka consumer instance.
-        long_avg: Initial long-term running average.
-        short_avg: Initial short-term running average.
-
-    Returns:
-        Tuple (short_avg, long_avg) after processing the latest message.
-    """
-    long_alpha = 0.0002  # Long-term averaging factor
-    short_alpha = 0.02   # Short-term averaging factor
-
-    # Poll once to get the latest message
-    msg = consumer.poll(timeout=1.0)
-
-    if msg is None or msg.value() is None:
-        print("No new messages in Kafka. Exiting...")
-        #consumer.close()
-        return short_avg, long_avg  # Return unchanged averages if no message was found
-
-    if msg.error():
-        print(f"Kafka Error: {msg.error()}")
-        #consumer.close()
-        return short_avg, long_avg  # Return unchanged averages on error
-
-    try:
-        # Decode and parse JSON message
-        message_value = msg.value().decode('utf-8')
-        message_dict = json.loads(message_value)
-
-        # Convert execution duration to float
-        execution_duration = float(message_dict["execution_duration_ms"])
-
-        # Compute running averages
-        long_avg = (long_alpha * execution_duration) + (1 - long_alpha) * long_avg
-        short_avg = (short_alpha * execution_duration) + (1 - short_alpha) * short_avg
-
-        print(f"Updated Averages → Short: {short_avg}, Long: {long_avg}")
-
-        # Commit offset (optional if auto-commit is disabled)
-        consumer.commit()
-
-    except json.JSONDecodeError as e:
-        print(f"JSON Decode Error: {e}")
-    except ValueError as e:
-        print(f"ValueError converting execution_duration_ms: {e}")
-
-    # Close consumer and exit
-    #consumer.close()
-    return short_avg, long_avg
 
 
 def create_consumer(topic, group_id):
@@ -130,7 +83,7 @@ def create_consumer(topic, group_id):
     consumer = Consumer({
         'bootstrap.servers': KAFKA_BROKER,
         'group.id': group_id,
-        'auto.offset.reset': 'latest',  # Read from the beginning if no offset found
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found
         'enable.auto.commit': False,       # Enable automatic commit
         'enable.partition.eof': False,    # Avoid EOF issues
         })
@@ -144,7 +97,7 @@ def main():
     consumer_leaderboard = create_consumer(TOPIC_LEADERBOARD, 'live_analytics')
     consumer_query_counter = create_consumer(TOPIC_QUERY_METRICS, 'live_analytics')
     consumer_compile = create_consumer(TOPIC_COMPILE_METRICS, 'live_analytics')
-    consumer_stress = create_consumer(TOPIC_STRESS_INDEX, 'live_analytics')
+    consumer_stress = create_consumer(TOPIC_FLAT_TABLES, 'live_analytics')
     initialize_duckdb()
     con = duckdb.connect(DUCKDB_FILE)
     producer = Producer({
@@ -160,16 +113,16 @@ def main():
             query_msg = consumer_query_counter.poll(timeout=1.0)
             compile_msg = consumer_compile.poll(timeout=1.0)
             stress_msg = consumer_stress.poll(timeout=1.0)
-            stress_index = calculate_stress(consumer_stress,long_avg,short_avg)
-            long_avg = stress_index[1]
-            short_avg = stress_index[0]
+            #stress_index = calculate_stress(consumer_stress,long_avg,short_avg)
+            #long_avg = stress_index[1]
+            #short_avg = stress_index[0]
             #print(stress_index)
-            #ddb.parquet_to_table(consumer_query_counter,'LIVE_QUERY_METRICS',con, QUERY_COLUMNS,TOPIC_QUERY_METRICS)
+            ddb.parquet_to_table(consumer_stress,'flattened_table_ids',con, FLAT_COLUMNS,TOPIC_FLAT_TABLES)
             #time.sleep(5)
-            #ddb.check_duckdb_table('LIVE_QUERY_METRICS',con)
+            ddb.check_duckdb_table('flattened_table_ids',con)
             if stress_msg is not None and not stress_msg.error():
                 message_value = json.loads(stress_msg.value().decode('utf-8'))
-                #print(f"Received from {TOPIC_STRESS_INDEX}: {message_value}")
+                print(f"Received from {TOPIC_FLAT_TABLES}: {message_value}")
             '''
             if leader_msg is not None and not leader_msg.error():
                 message_value = json.loads(leader_msg.value().decode('utf-8'))
