@@ -200,7 +200,6 @@ WHERE 1
     AND arrival_timestamp BETWEEN '{start}' AND '{end}'
 ORDER BY o.arrival_timestamp   
 """
-############### DASHBOARD QUERIES ############################
 
 # view to count analytical queries vs. transform queries per table_id
 create_view_tables_workload_count = """
@@ -235,4 +234,33 @@ FROM select_count_table s
 FULL OUTER JOIN transform_count_table t
 ON t.table_transformed = s.table_read_by_select
 """
+
+############### DASHBOARD QUERIES ############################
+
+# compares the average time from last ingest to when the analytical query was run to the average time to the next ingest in order to determine
+# data freshness. Filters tables where the average time from last ingest exceeds average time to next ingest
+average_times_ingestion_analytics = """
+WITH analytical_tables AS (
+SELECT  -- get the tables that are identified as tables for analytical workflow
+    instance_id,
+    table_id,
+CAST(COALESCE(select_count / (transform_count + select_count), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
+FROM tables_workload_count
+WHERE percentage_select_queries > 0.80
+)
+SELECT 
+    instance_id, 
+    read_table_id,
+    CAST(AVG(time_since_last_ingest_ms) / 1000.0 AS DECIMAL(20, 0)) AS average_time_since_last_ingest_s, 
+    CAST(AVG(time_to_next_ingest_ms) / 1000.0 AS DECIMAL(20, 0)) AS average_time_to_next_ingest_s
+FROM output_table
+WHERE 1 
+    AND read_table_id IN ( 
+        SELECT table_id
+        FROM analytical_tables) -- only consider analytial tables that were read
+    AND query_type = 'select'
+GROUP BY instance_id, read_table_id
+HAVING average_time_since_last_ingest_s > average_time_to_next_ingest_s --potential data freshness issues
+"""
+
 
