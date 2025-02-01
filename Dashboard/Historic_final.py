@@ -278,7 +278,7 @@ def historical_view_graphs():
                 FROM analytical_tables) -- only consider analytial tables that were read
             AND query_type = 'select'
         GROUP BY instance_id, read_table_id
-        HAVING average_time_since_last_ingest_s > average_time_to_next_ingest_s --potential data freshness issues
+        --HAVING average_time_since_last_ingest_s > average_time_to_next_ingest_s --potential data freshness issues
     """
 
 # Streamlit UI
