@@ -167,6 +167,29 @@ def display_metrics():
 # Ensure 'arrival_timestamp' is converted to datetime
 df['arrival_timestamp'] = pd.to_datetime(df['arrival_timestamp'], errors='coerce')
 
+def real_time_graph_in_historical_view():
+    # This is where you can get the consumer, long_avg, short_avg as per your application logic
+    consumer = None  # Kafka consumer instance, replace with your actual consumer
+    long_avg = 0.0  # Initial value for long-term average
+    short_avg = 0.0  # Initial value for short-term average
+
+    # Container for the graph
+    graph_placeholder = st.empty()
+
+    # Update the plot periodically (using a loop)
+    for i in range(1000):  # You can adjust the range to control how many times the graph updates
+        # Call your function to get updated averages and bytes spilled
+        short_avg, long_avg, bytes_spilled = calculate_stress(consumer, long_avg, short_avg)
+        
+        # Visualize the stress index with the updated values
+        visualize_stress_index(short_avg, long_avg, bytes_spilled)
+
+        # Display the graph in the placeholder
+        graph_placeholder.pyplot(fig)  # or use `graph_placeholder.plotly_chart(fig)` depending on your library
+
+        # Sleep for a certain interval before updating the graph again
+        time.sleep(1)  # Updates every 1 second, adjust the interval as needed
+
 # Now, you can safely use .dt accessor on 'arrival_timestamp'
 def historical_view_graphs():
     # ---- INSERT YOUR SQL QUERY HERE ----
@@ -284,7 +307,7 @@ def historical_view_graphs():
 if view_mode == "Historical View":
     display_metrics()  # Show the basic metrics
     historical_view_graphs()  # Show the historical view graphs
-    
+    real_time_graph_in_historical_view() #function calls teh stress index
 # Footer: Add a custom footer
 st.markdown("""
     <footer style="text-align:center; font-size:12px; color:grey; padding-top:20px; border-top: 1px solid #e0e0e0; margin-top:20px;">
