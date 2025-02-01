@@ -88,6 +88,62 @@ def calculate_stress(consumer, long_avg, short_avg):
     return short_avg, long_avg
 
 
+def calculate_stress(consumer, long_avg, short_avg):
+    """
+    Reads the latest message from Kafka, updates the running averages, and exits.
+
+    Args:
+        consumer: Kafka consumer instance.
+        long_avg: Initial long-term running average.
+        short_avg: Initial short-term running average.
+
+    Returns:
+        Tuple (short_avg, long_avg) after processing the latest message.
+    """
+    long_alpha = 0.0002  # Long-term averaging factor
+    short_alpha = 0.02   # Short-term averaging factor
+
+    # Poll once to get the latest message
+    msg = consumer.poll(timeout=1.0)
+
+    if msg is None or msg.value() is None:
+        print("No new messages in Kafka. Exiting...")
+        #consumer.close()
+        return short_avg, long_avg  # Return unchanged averages if no message was found
+
+    if msg.error():
+        print(f"Kafka Error: {msg.error()}")
+        #consumer.close()
+        return short_avg, long_avg  # Return unchanged averages on error
+
+    try:
+        # Decode and parse JSON message
+        
+        message_value = msg.value().decode('utf-8')
+        message_dict = json.loads(message_value)
+        print(message_dict)
+        # Convert execution duration to float
+        execution_duration = float(message_dict["execution_duration_ms"])
+        mb_spilled = message_dict["mbytes_spilled"]
+
+        # Compute running averages
+        long_avg = (long_alpha * execution_duration) + (1 - long_alpha) * long_avg
+        short_avg = (short_alpha * execution_duration) + (1 - short_alpha) * short_avg
+
+        print(f"Updated Averages → Short: {short_avg}, Long: {long_avg}")
+
+        # Commit offset (optional if auto-commit is disabled)
+        consumer.commit()
+
+    except json.JSONDecodeError as e:
+        print(f"JSON Decode Error: {e}")
+    except ValueError as e:
+        print(f"ValueError converting execution_duration_ms: {e}")
+
+    # Close consumer and exit
+    #consumer.close()
+    return short_avg, long_avg, mb_spilled
+
 def write_to_topic(batch, topic, producer, list_columns):
     try:
         if not isinstance(batch, pd.DataFrame):
@@ -519,9 +575,15 @@ def parquet_to_table(consumer, table, conn, columns,topic):
         df["arrival_timestamp"] = pd.to_datetime(df["arrival_timestamp"], errors='coerce')  # Handle parsing errors
     if topic == 'flattened':
         df['read_table_ids'] = df['read_table_ids'].astype(str).str.split(",")
-        df = df.explode('read_table_ids',ignore_index=True)
+        df = df.explode('read_table_ids', ignore_index=True)
+
+        # Handle None/NaN values before conversion
+        df['read_table_ids'] = pd.to_numeric(df['read_table_ids'], errors='coerce')
+
+        # Convert to nullable integer type (allows NaN values)
+        df['read_table_ids'] = df['read_table_ids'].astype(pd.Int64Dtype())
+
     print(df)
-    df['read_table_ids'] = pd.to_numeric(df['read_table_ids'], errors='coerce').astype('int64')
     print(df)
     # Save as Parquet
     df.to_parquet(parquet_file, index=False)
