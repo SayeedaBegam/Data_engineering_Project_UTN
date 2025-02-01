@@ -6,7 +6,7 @@ import os
 import duckdb
 from datetime import datetime
 from numerize import numerize
-
+import time
 # Set up the page layout
 st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
 st.header("Redset Dashboard")
@@ -167,102 +167,143 @@ def display_metrics():
 # Ensure 'arrival_timestamp' is converted to datetime
 df['arrival_timestamp'] = pd.to_datetime(df['arrival_timestamp'], errors='coerce')
 
+############# STRESS INDEX QUERY ##########################################
 def real_time_graph_in_historical_view():
-    # This is where you can get the consumer, long_avg, short_avg as per your application logic
-    consumer = None  # Kafka consumer instance, replace with your actual consumer
+    # Initialize Kafka consumer (replace with actual consumer setup)
+    conf = {
+        'bootstrap.servers': 'localhost:9092',  # Kafka broker address
+        'group.id': 'stress-index-consumer',
+        'auto.offset.reset': 'earliest'
+    }
+    consumer = Consumer(conf)
+    consumer.subscribe(['TOPIC_FLAT_TABLES'])  
+
     long_avg = 0.0  # Initial value for long-term average
     short_avg = 0.0  # Initial value for short-term average
 
     # Container for the graph
     graph_placeholder = st.empty()
 
-    # Update the plot periodically (using a loop)
-    for i in range(1000):  # You can adjust the range to control how many times the graph updates
-        # Call your function to get updated averages and bytes spilled
-        short_avg, long_avg, bytes_spilled = calculate_stress(consumer, long_avg, short_avg)
-        
-        # Visualize the stress index with the updated values
-        visualize_stress_index(short_avg, long_avg, bytes_spilled)
+    try:
+        # Update the plot periodically (using a loop)
+        for i in range(1000):  # You can adjust the range to control how many times the graph updates
+            # Call your function to get updated averages and bytes spilled
+            short_avg, long_avg, bytes_spilled = calculate_stress(consumer, long_avg, short_avg)
 
-        # Display the graph in the placeholder
-        graph_placeholder.pyplot(fig)  # or use `graph_placeholder.plotly_chart(fig)` depending on your library
+            # Visualize the stress index with the updated values
+            fig = visualize_stress_index(short_avg, long_avg, bytes_spilled)
 
-        # Sleep for a certain interval before updating the graph again
-        time.sleep(1)  # Updates every 1 second, adjust the interval as needed
+            # Display the graph in the placeholder
+            graph_placeholder.plotly_chart(fig, use_container_width=True)
 
-# Now, you can safely use .dt accessor on 'arrival_timestamp'
+            # Sleep for a certain interval before updating the graph again
+            time.sleep(1)  # Updates every 1 second, adjust the interval as needed
+
+    finally:
+        # Close the Kafka consumer and clear the placeholder when done
+        consumer.close()
+        graph_placeholder.empty()
+
+
+
+##################OTHER ANALYTICAL QUERIES############################
 def historical_view_graphs():
-    # ---- INSERT YOUR SQL QUERY HERE ----
-    # Example: Query to get the distribution of query types
-    sql_query_query_type_dist = """
-        SELECT query_type, COUNT(*) AS count
-        FROM cleaned_data
-        GROUP BY query_type
-    """
-    
-    # Execute the SQL query to get the distribution of query types
-    query_type_dist = con.execute(sql_query_query_type_dist).fetchdf()
-    
-    # ---- INSERT SQL QUERY FOR EXECUTION TIME CATEGORIES ----
-    # Example: Query to get execution time categories (Short, Medium, Long)
-    sql_query_exec_time_category = """
-        SELECT 
-            CASE 
-                WHEN execution_duration_ms <= 100 THEN 'Short'
-                WHEN execution_duration_ms <= 1000 THEN 'Medium'
-                ELSE 'Long'
-            END AS execution_time_category, 
-            COUNT(*) AS count
-        FROM cleaned_data
-        GROUP BY execution_time_category
-    """
-    
-    # Execute the SQL query for execution time category
-    execution_time_dist = con.execute(sql_query_exec_time_category).fetchdf()
 
-    # ---- INSERT SQL QUERY FOR HOURLY QUERY COUNT ----
-    # Example: Query to get hourly query count
-    sql_query_hourly_query_count = """
-        SELECT EXTRACT(HOUR FROM arrival_timestamp) AS hour, COUNT(*) AS query_count
-        FROM cleaned_data
-        GROUP BY hour
-        ORDER BY hour
-    """
+# SQL Query for Analytical vs Transform Count
+    analytical_vs_transform_count = """
+        WITH select_count_table AS (        
+            SELECT --count select queries by read_table_ids
+                instance_id,
+                read_table_id AS table_read_by_select,
+                COUNT(CASE WHEN query_type = 'select' THEN 1 END) AS select_count
+        FROM output_table
+            WHERE query_type = 'select'
+            AND read_table_id != 999999 -- only clean data, 999999 stands for Null
+            AND instance_id = 0
+            GROUP BY ALL
+        ), transform_count_table AS (
+            SELECT --count transformation queries by write_table_id
+                instance_id,
+                write_table_id AS table_transformed,
+                COUNT(CASE WHEN query_type IN ('update', 'delete') THEN 1 END) AS transform_count
+            FROM output_table
+            WHERE query_type IN ('update', 'delete')
+            AND write_table_id != 999999 -- only clean data, 999999 stands for Null
+            AND instance_id = 0
+            GROUP BY ALL        
+        )
+        SELECT 
+            COALESCE(s.instance_id, t.instance_id) AS instance_id,
+            COALESCE(t.table_transformed, s.table_read_by_select) AS table_id,
+            t.transform_count,
+            s.select_count
+        FROM select_count_table s
+        FULL OUTER JOIN transform_count_table t
+        ON t.table_transformed = s.table_read_by_select
+"""
+
+# Streamlit UI
+st.title("Real-Time Analytical vs Transform Count")
+
+# Create an empty placeholder for the graph
+graph_placeholder = st.empty()
+
+# Function to fetch data and update the graph
+def update_graph():
+    # Execute the SQL query
+    result_df = con.execute(analytical_vs_transform_count).fetchdf()
+
+    # Clean the data
+    result_df['table_id'] = result_df['table_id'].astype(str)
+    result_df.fillna(0, inplace=True)
+
+    # Create a bar chart comparing select_count and transform_count per table
+    fig = px.bar(result_df, 
+                 x='table_id', 
+                 y=['select_count', 'transform_count'], 
+                 title="Select vs Transform Counts by Table",
+                 labels={'table_id': 'Table ID', 'value': 'Count'},
+                 barmode='group')  # Group bars for select_count and transform_count
+
+    # Update the placeholder with the new graph
+    graph_placeholder.plotly_chart(fig, use_container_width=True)
+
+# Simulate periodic updates (e.g., every 5 seconds)
+if st.button("Start Real-Time Updates"):
+    while True:
+        update_graph()  # Update the graph with fresh data
+        time.sleep(5)  # Sleep for 5 seconds (adjust based on how frequently you want to update)
+else:
+    st.write("Click the button to start real-time updates.")
+
+
+    # ---- INSERT SQL ----
     
-    # Execute the SQL query for hourly query count
-    query_count_per_hour = con.execute(sql_query_hourly_query_count).fetchdf()
+    
+   
+    
+
+    # ---- INSERT SQL ---
+    
+    
+
+
     
     # ---- Now, generate visualizations using the data fetched via SQL queries ----
     
-    # Query Type Distribution (Pie Chart)
-    fig_query_type = px.pie(query_type_dist, names='query_type', values='count', title="Query Type Distribution")
     
-    # Execution Time Category Distribution (Donut Chart)
-    fig_exec_time_donut = px.pie(execution_time_dist, names='execution_time_category', values='count', title="Query Execution Time Distribution", hole=0.3)
-
-    # Hourly Query Count (Line Chart)
-    fig_query_count_hourly = px.line(query_count_per_hour, x='hour', y='query_count', title="Query Count per Hour", labels={'hour': 'Hour of Day', 'query_count': 'Query Count'})
 
     # Display charts in parallel (side by side)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.plotly_chart(fig_query_type, use_container_width=True)
-    with col2:
-        st.plotly_chart(fig_exec_time_donut, use_container_width=True)
+ 
 
-    # Display the second row of charts (2 parallel)
-    col3, col4 = st.columns(2)
-    with col3:
-        st.plotly_chart(fig_query_count_hourly, use_container_width=True)
-    with col4:
-        st.plotly_chart(fig_query_count_hourly, use_container_width=True)
 
 
 # Show content based on the selected view mode
 if view_mode == "Historical View":
     display_metrics()  # Show the basic metrics
     historical_view_graphs()  # Show the historical view graphs
-    real_time_graph_in_historical_view() #function calls teh stress index
+    real_time_graph_in_historical_view() #function calls the stress index
+
 # Footer: Add a custom footer
 st.markdown("""
     <footer style="text-align:center; font-size:12px; color:grey; padding-top:20px; border-top: 1px solid #e0e0e0; margin-top:20px;">
