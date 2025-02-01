@@ -202,8 +202,9 @@ ORDER BY o.arrival_timestamp
 """
 ############### DASHBOARD QUERIES ############################
 
-# analytical tables vs. transform tables
-analytical_vs_transform_count = """
+# view to count analytical queries vs. transform queries per table_id
+create_view_tables_workload_count = """
+CREATE OR REPLACE VIEW tables_workload_count AS 
 WITH select_count_table AS (        
     SELECT --count select queries by read_table_ids
         instance_id,
