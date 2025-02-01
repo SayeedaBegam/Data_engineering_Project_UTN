@@ -45,6 +45,9 @@ QUERY_METRIC_COLUMNS = [
 'num_scans',
 'num_aggregations']
 
+
+
+
 def send_to_kafka(producer, topic, chunk):
     """Send data to Kafka"""
     for record in chunk.to_dict(orient='records'):
@@ -80,10 +83,10 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
         try:
             send_to_kafka(producer, TOPIC_RAW_DATA, batch)
             print(f"Batch {batch_id} sent to Kafka successfully.")
-            #ddb.write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
-            ddb.write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
-            #ddb.write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
-            #ddb.write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
+            write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
+            write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
+            write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
+            write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
 
         except Exception as e:
             print(f"Error: {e}")
@@ -147,6 +150,77 @@ def type_cast_batch(batch):
             batch[column] = pd.to_datetime(batch[column], errors='coerce')  # Handle invalid timestamps
         else:
             batch[column] = batch[column].astype(dtype)
+
+
+def clean_data(batch,producer):
+    """
+    Cleans a single batch and writes to clean_data topic.
+    """
+    try:
+        # Convert "NULL" strings and None to actual NaN values
+        batch.replace(["NULL", None], pd.NA, inplace=True)
+
+        # Ensure numeric fields default to 0
+        numeric_columns = [
+            "instance_id", "cluster_size", "user_id", "database_id", "query_id",
+            "compile_duration_ms", "queue_duration_ms", "execution_duration_ms",
+            "num_permanent_tables_accessed", "num_external_tables_accessed",
+            "num_system_tables_accessed", "mbytes_scanned", "mbytes_spilled",
+            "num_joins", "num_scans", "num_aggregations"
+        ]
+
+        for col in numeric_columns:
+            if col in df.columns:
+                batch[col] = pd.to_numeric(batch[col], errors='coerce').fillna(0).astype(int)  
+
+        # Fix text fields
+        text_columns = ["feature_fingerprint", "cache_source_query_id", "query_type"]
+        for col in text_columns:
+            if col in df.columns:
+                batch[col] = batch[col].fillna("UNKNOWN")  # Fix missing text fields
+
+        # Fix read_table_ids and write_table_ids
+        batch["read_table_ids"] = batch.get("read_table_ids", pd.NA).astype(str).fillna("[]")
+        batch["write_table_ids"] = batch.get("write_table_ids", pd.NA).astype(str).fillna("[]")
+
+        # Fix boolean fields
+        boolean_columns = ["was_aborted", "was_cached"]
+        for col in boolean_columns:
+            if col in batch.columns:
+                batch[col] = batch[col].fillna(False).astype(bool)
+        producer.produce(TOPIC_CLEAN_DATA, key=None, value=json.dumps(record))
+    except Exception as e:
+        print(f"❌ Error processing message: {e}")
+
+def write_to_topic(batch, topic, producer, list_columns):
+    try:
+        if not isinstance(batch, pd.DataFrame):
+            raise ValueError("Expected 'batch' to be a pandas DataFrame.")
+
+        # Select only relevant columns
+        selected_columns = batch[list_columns].copy()  # Create a copy to avoid modifying original DataFrame
+
+        if selected_columns.empty:
+            print(f"Warning: No relevant columns found for topic '{topic}'.")
+            return
+        
+        # Convert datetime columns to string (ISO 8601 format)
+        for col in selected_columns.select_dtypes(include=['datetime64[ns]']).columns:
+            selected_columns[col] = selected_columns[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Convert to a list of dictionaries (each row as a JSON object)
+        json_payloads = selected_columns.to_dict(orient='records')
+
+        # Send each record individually
+        for record in json_payloads:
+            producer.produce(topic, value=json.dumps(record))
+
+    except Exception as e:
+        print(f"Error writing to topic '{topic}': {e}")
+
+    finally:
+        producer.flush()
+
 
 
 def main():
