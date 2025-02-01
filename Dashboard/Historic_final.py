@@ -216,7 +216,7 @@ def historical_view_graphs():
         CREATE OR REPLACE TABLE ingestion_intervals_per_table (
                    instance_id int32,
                    query_id int64,
-                   write_table_id int64
+                   write_table_id int64,
                    current_timestamp timestamp,
                    next_timestamp timestamp)
     """
