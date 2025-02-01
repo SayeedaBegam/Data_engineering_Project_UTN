@@ -109,12 +109,12 @@ def calculate_stress(consumer, long_avg, short_avg):
     if msg is None or msg.value() is None:
         print("No new messages in Kafka. Exiting...")
         #consumer.close()
-        return short_avg, long_avg  # Return unchanged averages if no message was found
+        return short_avg, long_avg,0  # Return unchanged averages if no message was found
 
     if msg.error():
         print(f"Kafka Error: {msg.error()}")
         #consumer.close()
-        return short_avg, long_avg  # Return unchanged averages on error
+        return short_avg, long_avg,0  # Return unchanged averages on error
 
     try:
         # Decode and parse JSON message

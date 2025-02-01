@@ -1,4 +1,5 @@
 import pandas as pd
+from confluent_kafka import Consumer, Producer
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
@@ -7,6 +8,10 @@ import duckdb
 from datetime import datetime
 from numerize import numerize
 import time
+import ddb_wrappers as ddb
+
+KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
+
 # Set up the page layout
 st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
 st.header("Redset Dashboard")
@@ -72,6 +77,18 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+
+def create_consumer(topic, group_id):
+    """Create a Confluent Kafka Consumer."""
+    consumer = Consumer({
+        'bootstrap.servers': KAFKA_BROKER,
+        'group.id': group_id,
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found
+        'enable.auto.commit': False,       # Enable automatic commit
+        'enable.partition.eof': False,    # Avoid EOF issues
+        })
+    consumer.subscribe([topic])
+    return consumer
 
 # Function to display metrics with subtle colors
 def display_metrics():
@@ -169,46 +186,39 @@ df['arrival_timestamp'] = pd.to_datetime(df['arrival_timestamp'], errors='coerce
 
 ############# STRESS INDEX QUERY ##########################################
 def real_time_graph_in_historical_view():
-    # Initialize Kafka consumer (replace with actual consumer setup)
-    conf = {
-        'bootstrap.servers': 'localhost:9092',  # Kafka broker address
-        'group.id': 'stress-index-consumer',
-        'auto.offset.reset': 'earliest'
-    }
-    consumer = Consumer(conf)
-    consumer.subscribe(['TOPIC_FLAT_TABLES'])  
+    """Continuously updates the Stress Index graph in real time without duplicating elements."""
+    
+    # Initialize Kafka consumer
+    consumer = create_consumer('stressindex', 'liveanalytics')
 
     long_avg = 0.0  # Initial value for long-term average
     short_avg = 0.0  # Initial value for short-term average
 
-    # Container for the graph
+    if "stress_index_fig" not in st.session_state:
+        st.session_state.stress_index_fig = go.Figure()
+
     graph_placeholder = st.empty()
 
     try:
-        # Update the plot periodically (using a loop)
-        for i in range(1000):  # You can adjust the range to control how many times the graph updates
-            # Call your function to get updated averages and bytes spilled
-            short_avg, long_avg, bytes_spilled = calculate_stress(consumer, long_avg, short_avg)
+        while True:
+            short_avg, long_avg, bytes_spilled = ddb.calculate_stress(consumer, long_avg, short_avg)
 
-            # Visualize the stress index with the updated values
-            fig = visualize_stress_index(short_avg, long_avg, bytes_spilled)
+            st.session_state.stress_index_fig = visualize_stress_index(short_avg, long_avg, bytes_spilled)
 
-            # Display the graph in the placeholder
-            graph_placeholder.plotly_chart(fig, use_container_width=True)
+            graph_placeholder.plotly_chart(st.session_state.stress_index_fig, use_container_width=True)
 
-            # Sleep for a certain interval before updating the graph again
-            time.sleep(1)  # Updates every 1 second, adjust the interval as needed
+            time.sleep(5)
 
     finally:
-        # Close the Kafka consumer and clear the placeholder when done
         consumer.close()
         graph_placeholder.empty()
 
 def visualize_stress_index(short_avg, long_avg, bytes_spilled):
-    # Create a figure using Plotly's graph objects
+    """Generates a real-time stress index visualization with updated data."""
+    
     fig = go.Figure()
 
-    # Add a line for the short-term average (blue)
+    # ✅ Short-term average (blue)
     fig.add_trace(go.Scatter(
         x=[1], y=[short_avg],
         mode='lines+markers',
@@ -216,7 +226,7 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
         line=dict(color='blue', width=2)
     ))
 
-    # Add a line for the long-term average (red)
+    # ✅ Long-term average (red)
     fig.add_trace(go.Scatter(
         x=[1], y=[long_avg],
         mode='lines+markers',
@@ -224,34 +234,33 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
         line=dict(color='red', width=2)
     ))
 
-    # Add shaded area for bytes spilled (green)
+    # ✅ Bytes spilled (shaded green area)
     fig.add_trace(go.Scatter(
         x=[1, 1], y=[0, bytes_spilled],
-        fill='tozeroy',  # Fills the area under the line
-        fillcolor='rgba(0,255,0,0.4)',  # Shaded green color with transparency
-        line=dict(color='green', width=2),  # Border of the area (optional)
+        fill='tozeroy',
+        fillcolor='rgba(0,255,0,0.4)',
+        line=dict(color='green', width=2),
         name='Bytes Spilled',
-        showlegend=False  # We don't need a legend for this trace
+        showlegend=False
     ))
 
-    # Create a secondary y-axis for bytes spilled (green area) to avoid overlap
+    # ✅ Layout for the stress index chart
     fig.update_layout(
         title="Stress Index Visualization",
         xaxis_title="Time",
         yaxis_title="Average Value",
         yaxis2=dict(
             title="Bytes Spilled",
-            overlaying="y",  # Overlay the secondary axis with the primary y-axis
-            side="right",  # Place the secondary y-axis on the right
+            overlaying="y",
+            side="right"
         ),
         showlegend=True,
         template='plotly_dark',
         xaxis=dict(tickvals=[1], ticktext=["Time"]),
-        margin=dict(t=30, b=30, l=30, r=50),  # Adjust margins for better spacing
+        margin=dict(t=30, b=30, l=30, r=50)
     )
 
     return fig
-
 
 ##################OTHER ANALYTICAL QUERIES############################
 def historical_view_graphs():
@@ -295,6 +304,7 @@ st.title("Real-Time Analytical vs Transform Count")
 # Create an empty placeholder for the graph
 graph_placeholder = st.empty()
 
+'''
 # Function to fetch data and update the graph
 def update_graph():
     # Execute the SQL query
@@ -322,7 +332,7 @@ if st.button("Start Real-Time Updates"):
         time.sleep(5)  # Sleep for 5 seconds (adjust based on how frequently you want to update)
 else:
     st.write("Click the button to start real-time updates.")
-
+'''
 
     # ---- INSERT SQL ----
     

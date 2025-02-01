@@ -51,8 +51,6 @@ QUERY_METRIC_COLUMNS = [
 'num_aggregations']
 
 
-
-
 def send_to_kafka(producer, topic, chunk):
     """Send data to Kafka"""
     for record in chunk.to_dict(orient='records'):
@@ -91,9 +89,9 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
             #write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
             #write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
             #write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
-            write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
+            #write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
             # TESTING
-            #write_to_topic(batch,TOPIC_FLAT_TABLES,producer,FLAT_COLUMNS)
+            write_to_topic(batch,TOPIC_FLAT_TABLES,producer,FLAT_COLUMNS)
         except Exception as e:
             print(f"Error: {e}")
         print("Finished streaming data to Kafka.")
@@ -102,7 +100,7 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
             # Use time difference between batches to simulate real time
             curr_batch_end = batch['arrival_timestamp'].iloc[-1]
             next_batch_start = df[df['batch_id'] == batch_id + 1]['arrival_timestamp'].iloc[0]
-            delay_stream(curr_batch_end, next_batch_start)
+            #delay_stream(curr_batch_end, next_batch_start)
 
     producer.flush()
     print("Batch over")
@@ -226,7 +224,6 @@ def write_to_topic(batch, topic, producer, list_columns):
 
     finally:
         producer.flush()
-
 
 
 def main():
