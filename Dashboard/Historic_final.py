@@ -236,6 +236,23 @@ def historical_view_graphs():
       """
      # Create flattend read and write table ids table
     con.execute(create_flattened_table_ids_table)
+
+    create_output_table = """
+        CREATE OR REPLACE TABLE output_table(
+           instance_id int32,
+           query_id int64,
+           query_type varchar,
+           write_table_id int64,
+           read_table_id int64,
+           arrival_timestamp timestamp,
+           last_write_table_insert timestamp,
+           next_write_table_insert timestamp,
+           time_since_last_ingest_ms int64,
+           time_to_next_ingest_ms int64
+           )
+    """
+    # Create output table
+    con.execute(create_output_table)
     
     # ---- Now, generate visualizations using the data fetched via SQL queries ----
     
