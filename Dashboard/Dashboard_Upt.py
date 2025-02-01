@@ -15,16 +15,15 @@ import ddb_wrappers as ddb
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Set up the page layout
-st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
-st.header("Redset Dashboard")
 
+# Initialize the Streamlit layout and options
+st.set_page_config(page_title="Redset Dashboard", page_icon="pipeline.png", layout="wide")
+st.header("Redset Dashboard")
 
 # Sidebar configuration
 st.sidebar.header("Menu")
-
-# Historical View / Live View Toggle
 view_mode = st.sidebar.radio("Select View", ("Historic View", "Live View"))
+
 
 # Add custom styling (CSS) for Query Counter and Leaderboard
 st.markdown("""
@@ -291,7 +290,12 @@ def Kafka_topic_to_DuckDB():
             st.session_state.fig3 = build_live_query_counts(con)
             st.session_state.fig4 = build_live_query_distribution(con)
             st.session_state.fig5 = build_live_compile_metrics(con)
-            st.session_state.fig6 = build_live_spilled_scanned(con)
+            #st.session_state.fig6 = build_live_spilled_scanned(con)
+
+            #Display metrices dynamically 
+            display_metrics(con)
+
+            # Render figures in containers
             uniq_id = str(int(time.time()))
             with st.container():
                 col1, col2, col3 = st.columns(3)
@@ -306,7 +310,7 @@ def Kafka_topic_to_DuckDB():
 
                 with col3:
                     fig5_placeholder.plotly_chart(st.session_state.fig5, use_container_width=True,key=f"fig5_chart_{uniq_id}")
-                    fig6_placeholder.plotly_chart(st.session_state.fig6, use_container_width=True,key=f"fig6_chart_{uniq_id}")
+                    #fig6_placeholder.plotly_chart(st.session_state.fig6, use_container_width=True,key=f"fig6_chart_{uniq_id}")
             # Wait before fetching new updates
             time.sleep(5)
 
@@ -321,7 +325,100 @@ def Kafka_topic_to_DuckDB():
 
 
 ########### DuckDB to Dashboard ################
+# Function to display metrics with subtle colors
+def display_metrics(con):
+    # Querying the DuckDB tables to get the latest metrics
+    total_query = con.execute("SELECT COUNT(*) FROM LIVE_QUERY_METRICS").fetchone()[0]
+    successful_query = con.execute("SELECT COUNT(*) FROM LIVE_QUERY_METRICS WHERE was_aborted = FALSE").fetchone()[0]
+    aborted_query = con.execute("SELECT COUNT(*) FROM LIVE_QUERY_METRICS WHERE was_aborted = TRUE").fetchone()[0]
+    cached_query = con.execute("SELECT COUNT(*) FROM LIVE_QUERY_METRICS WHERE was_cached = TRUE").fetchone()[0]
+    total_scan_mbytes = con.execute("SELECT SUM(mbytes_scanned) FROM LIVE_COMPILE_METRICS").fetchone()[0]  # Total MBs scanned
+    total_spilled_mbytes = con.execute("SELECT SUM(mbytes_spilled) FROM LIVE_COMPILE_METRICS").fetchone()[0]  # Total MBs spilled
+    total_joins = con.execute("SELECT SUM(num_joins) FROM LIVE_COMPILE_METRICS").fetchone()[0]  # Total joins across all queries
+    total_aggregations = con.execute("SELECT SUM(num_aggregations) FROM LIVE_COMPILE_METRICS").fetchone()[0]  # Total aggregations across all queries
 
+    # Displaying the metrics using Streamlit
+    st.markdown("### Query Metrics")
+
+    # Layout for the metrics
+    col1, col2, col3, col4 = st.columns(4)
+    light_red = "#FFEBEE"
+    dark_red = "#D32F2F"
+    
+    # Total Queries
+    with col1:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>📊 Total Queries</h5>
+                <h3>{total_query}</h3>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    # Successful Queries
+    with col2:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>✅ Successful Queries</h5>
+                <h3>{successful_query}</h3>
+            </div>
+        """, unsafe_allow_html=True)
+
+    # Aborted Queries
+    with col3:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>❌ Aborted Queries</h5>
+                <h3>{aborted_query}</h3>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    # Cached Queries
+    with col4:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>💾 Cached Queries</h5>
+                <h3>{cached_query}</h3>
+            </div>
+        """, unsafe_allow_html=True)
+
+    # New row for additional metrics
+    st.markdown("### Additional Metrics")
+    
+    col5, col6 = st.columns(2)
+    with col5:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>📊 MBs Scanned</h5>
+                <h3>{total_scan_mbytes} MB</h3>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col6:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>💡 MBs Spilled</h5>
+                <h3>{total_spilled_mbytes} MB</h3>
+            </div>
+        """, unsafe_allow_html=True)
+
+    col7, col8 = st.columns(2)
+    with col7:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>🔗 Total Joins</h5>
+                <h3>{total_joins}</h3>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col8:
+        st.markdown(f"""
+            <div style="padding: 20px; background-color: {light_red}; border-left: 10px solid {dark_red}; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+                <h5>🔢 Total Aggregations</h5>
+                <h3>{total_aggregations}</h3>
+            </div>
+        """, unsafe_allow_html=True)
+
+# output = table
 def build_leaderboard_compiletime(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
@@ -363,7 +460,7 @@ def build_leaderboard_compiletime(con):
     )
 
     return fig
-
+#output = bar chart 
 def build_leaderboard_user_queries(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
@@ -397,7 +494,7 @@ def build_leaderboard_user_queries(con):
     )
     #fig.show()
     return fig
-
+#output = piechart
 def build_live_query_counts(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
@@ -414,25 +511,25 @@ def build_live_query_counts(con):
         ORDER BY occurrence_count DESC;
     """).df()
 
-    # Visualization: Bar Chart using Plotly
+    # Visualization: Pie Chart using Plotly
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=df['query_type'],
-        y=df['occurrence_count'],
-        marker=dict(color=px.colors.qualitative.Plotly),  # Dynamic colors
-        text=df['occurrence_count'],  # Show counts on bars
-        textposition='auto'
+
+    fig.add_trace(go.Pie(
+        labels=df['query_type'],  # Use query_type as labels
+        values=df['occurrence_count'],  # Use occurrence_count as values
+        hoverinfo='label+percent',  # Display label and percentage on hover
+        textinfo='label+percent',  # Display label and percentage on the chart itself
+        marker=dict(colors=px.colors.qualitative.Plotly),  # Dynamic colors
     ))
 
     fig.update_layout(
         title='Query Type Distribution',
-        xaxis_title='Query Type',
-        yaxis_title='Occurrences',
         template='plotly_dark'
     )
 
     return fig
 
+#output = dounut chart
 def build_live_query_distribution(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
@@ -469,7 +566,7 @@ def build_live_query_distribution(con):
     )
 
     return fig
-
+#output = stacked bar chart
 def build_live_compile_metrics(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
@@ -502,14 +599,14 @@ def build_live_compile_metrics(con):
     #fig.show()
     return fig
 
-
+'''
 def build_live_spilled_scanned(con):
-    '''
+    '''''''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
     con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
     
     returns dataframe containing sum of spilled and scanned data
-    '''
+    ''''''
     df = con.execute(f"""
     SELECT 
     SUM(mbytes_spilled) AS mb_spilled,
@@ -537,13 +634,13 @@ def build_live_spilled_scanned(con):
     fig.update_layout(
         title='Data Spilled vs Data Scanned',
         barmode='group',
-        xaxis_title='Metrics',
-        yaxis_title='MB',
-        template='plotly_dark'
-    )
+       # xaxis_title='Metrics',
+      #  yaxis_title='MB',
+     #   template='plotly_dark'
+    #)
     #fig.show()
-    return fig
-
+   # return fig
+'''
 if view_mode == "Historical View":
     Kafka_topic_to_DuckDB()
 
