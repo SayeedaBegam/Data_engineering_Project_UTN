@@ -204,6 +204,53 @@ def real_time_graph_in_historical_view():
         consumer.close()
         graph_placeholder.empty()
 
+def visualize_stress_index(short_avg, long_avg, bytes_spilled):
+    # Create a figure using Plotly's graph objects
+    fig = go.Figure()
+
+    # Add a line for the short-term average (blue)
+    fig.add_trace(go.Scatter(
+        x=[1], y=[short_avg],
+        mode='lines+markers',
+        name='Short-term Avg',
+        line=dict(color='blue', width=2)
+    ))
+
+    # Add a line for the long-term average (red)
+    fig.add_trace(go.Scatter(
+        x=[1], y=[long_avg],
+        mode='lines+markers',
+        name='Long-term Avg',
+        line=dict(color='red', width=2)
+    ))
+
+    # Add shaded area for bytes spilled (green)
+    fig.add_trace(go.Scatter(
+        x=[1, 1], y=[0, bytes_spilled],
+        fill='tozeroy',  # Fills the area under the line
+        fillcolor='rgba(0,255,0,0.4)',  # Shaded green color with transparency
+        line=dict(color='green', width=2),  # Border of the area (optional)
+        name='Bytes Spilled',
+        showlegend=False  # We don't need a legend for this trace
+    ))
+
+    # Create a secondary y-axis for bytes spilled (green area) to avoid overlap
+    fig.update_layout(
+        title="Stress Index Visualization",
+        xaxis_title="Time",
+        yaxis_title="Average Value",
+        yaxis2=dict(
+            title="Bytes Spilled",
+            overlaying="y",  # Overlay the secondary axis with the primary y-axis
+            side="right",  # Place the secondary y-axis on the right
+        ),
+        showlegend=True,
+        template='plotly_dark',
+        xaxis=dict(tickvals=[1], ticktext=["Time"]),
+        margin=dict(t=30, b=30, l=30, r=50),  # Adjust margins for better spacing
+    )
+
+    return fig
 
 
 ##################OTHER ANALYTICAL QUERIES############################
