@@ -1,5 +1,4 @@
 import pandas as pd
-from confluent_kafka import Consumer, Producer
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
@@ -8,10 +7,6 @@ import duckdb
 from datetime import datetime
 from numerize import numerize
 import time
-import ddb_wrappers as ddb
-
-KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
-
 # Set up the page layout
 st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
 st.header("Redset Dashboard")
@@ -77,18 +72,6 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-
-def create_consumer(topic, group_id):
-    """Create a Confluent Kafka Consumer."""
-    consumer = Consumer({
-        'bootstrap.servers': KAFKA_BROKER,
-        'group.id': group_id,
-        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found
-        'enable.auto.commit': False,       # Enable automatic commit
-        'enable.partition.eof': False,    # Avoid EOF issues
-        })
-    consumer.subscribe([topic])
-    return consumer
 
 # Function to display metrics with subtle colors
 def display_metrics():
@@ -186,39 +169,46 @@ df['arrival_timestamp'] = pd.to_datetime(df['arrival_timestamp'], errors='coerce
 
 ############# STRESS INDEX QUERY ##########################################
 def real_time_graph_in_historical_view():
-    """Continuously updates the Stress Index graph in real time without duplicating elements."""
-    
-    # Initialize Kafka consumer
-    consumer = create_consumer('stressindex', 'liveanalytics')
+    # Initialize Kafka consumer (replace with actual consumer setup)
+    conf = {
+        'bootstrap.servers': 'localhost:9092',  # Kafka broker address
+        'group.id': 'stress-index-consumer',
+        'auto.offset.reset': 'earliest'
+    }
+    consumer = Consumer(conf)
+    consumer.subscribe(['TOPIC_FLAT_TABLES'])  
 
     long_avg = 0.0  # Initial value for long-term average
     short_avg = 0.0  # Initial value for short-term average
 
-    if "stress_index_fig" not in st.session_state:
-        st.session_state.stress_index_fig = go.Figure()
-
+    # Container for the graph
     graph_placeholder = st.empty()
 
     try:
-        while True:
-            short_avg, long_avg, bytes_spilled = ddb.calculate_stress(consumer, long_avg, short_avg)
+        # Update the plot periodically (using a loop)
+        for i in range(1000):  # You can adjust the range to control how many times the graph updates
+            # Call your function to get updated averages and bytes spilled
+            short_avg, long_avg, bytes_spilled = calculate_stress(consumer, long_avg, short_avg)
 
-            st.session_state.stress_index_fig = visualize_stress_index(short_avg, long_avg, bytes_spilled)
+            # Visualize the stress index with the updated values
+            fig = visualize_stress_index(short_avg, long_avg, bytes_spilled)
 
-            graph_placeholder.plotly_chart(st.session_state.stress_index_fig, use_container_width=True)
+            # Display the graph in the placeholder
+            graph_placeholder.plotly_chart(fig, use_container_width=True)
 
-            time.sleep(5)
+            # Sleep for a certain interval before updating the graph again
+            time.sleep(1)  # Updates every 1 second, adjust the interval as needed
 
     finally:
+        # Close the Kafka consumer and clear the placeholder when done
         consumer.close()
         graph_placeholder.empty()
 
 def visualize_stress_index(short_avg, long_avg, bytes_spilled):
-    """Generates a real-time stress index visualization with updated data."""
-    
+    # Create a figure using Plotly's graph objects
     fig = go.Figure()
 
-    # ✅ Short-term average (blue)
+    # Add a line for the short-term average (blue)
     fig.add_trace(go.Scatter(
         x=[1], y=[short_avg],
         mode='lines+markers',
@@ -226,7 +216,7 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
         line=dict(color='blue', width=2)
     ))
 
-    # ✅ Long-term average (red)
+    # Add a line for the long-term average (red)
     fig.add_trace(go.Scatter(
         x=[1], y=[long_avg],
         mode='lines+markers',
@@ -234,86 +224,78 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
         line=dict(color='red', width=2)
     ))
 
-    # ✅ Bytes spilled (shaded green area)
+    # Add shaded area for bytes spilled (green)
     fig.add_trace(go.Scatter(
         x=[1, 1], y=[0, bytes_spilled],
-        fill='tozeroy',
-        fillcolor='rgba(0,255,0,0.4)',
-        line=dict(color='green', width=2),
+        fill='tozeroy',  # Fills the area under the line
+        fillcolor='rgba(0,255,0,0.4)',  # Shaded green color with transparency
+        line=dict(color='green', width=2),  # Border of the area (optional)
         name='Bytes Spilled',
-        showlegend=False
+        showlegend=False  # We don't need a legend for this trace
     ))
 
-    # ✅ Layout for the stress index chart
+    # Create a secondary y-axis for bytes spilled (green area) to avoid overlap
     fig.update_layout(
         title="Stress Index Visualization",
         xaxis_title="Time",
         yaxis_title="Average Value",
         yaxis2=dict(
             title="Bytes Spilled",
-            overlaying="y",
-            side="right"
+            overlaying="y",  # Overlay the secondary axis with the primary y-axis
+            side="right",  # Place the secondary y-axis on the right
         ),
         showlegend=True,
         template='plotly_dark',
         xaxis=dict(tickvals=[1], ticktext=["Time"]),
-        margin=dict(t=30, b=30, l=30, r=50)
+        margin=dict(t=30, b=30, l=30, r=50),  # Adjust margins for better spacing
     )
 
     return fig
+
 
 ##################OTHER ANALYTICAL QUERIES############################
 def historical_view_graphs():
 
 # SQL Query for Analytical vs Transform Count
-    analytical_vs_transform_count = """
-        WITH select_count_table AS (        
-            SELECT --count select queries by read_table_ids
-                instance_id,
-                read_table_id AS table_read_by_select,
-                COUNT(CASE WHEN query_type = 'select' THEN 1 END) AS select_count
-        FROM output_table
-            WHERE query_type = 'select'
-            AND read_table_id != 999999 -- only clean data, 999999 stands for Null
-            AND instance_id = 0
-            GROUP BY ALL
-        ), transform_count_table AS (
-            SELECT --count transformation queries by write_table_id
-                instance_id,
-                write_table_id AS table_transformed,
-                COUNT(CASE WHEN query_type IN ('update', 'delete') THEN 1 END) AS transform_count
-            FROM output_table
-            WHERE query_type IN ('update', 'delete')
-            AND write_table_id != 999999 -- only clean data, 999999 stands for Null
-            AND instance_id = 0
-            GROUP BY ALL        
+    average_times_ingestion_analytics = """
+        WITH analytical_tables AS (
+        SELECT  -- get the tables that are identified as tables for analytical workflow
+            instance_id,
+            table_id,
+        CAST(COALESCE(select_count / (transform_count + select_count), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
+        FROM tables_workload_count
+        WHERE percentage_select_queries > 0.80  
         )
         SELECT 
-            COALESCE(s.instance_id, t.instance_id) AS instance_id,
-            COALESCE(t.table_transformed, s.table_read_by_select) AS table_id,
-            t.transform_count,
-            s.select_count
-        FROM select_count_table s
-        FULL OUTER JOIN transform_count_table t
-        ON t.table_transformed = s.table_read_by_select
-"""
+            instance_id, 
+            read_table_id,
+            CAST(AVG(time_since_last_ingest_ms) / 1000.0 AS DECIMAL(20, 0)) AS average_time_since_last_ingest_s, 
+            CAST(AVG(time_to_next_ingest_ms) / 1000.0 AS DECIMAL(20, 0)) AS average_time_to_next_ingest_s
+        FROM output_table
+        WHERE 1 
+            AND read_table_id IN ( 
+                SELECT table_id
+                FROM analytical_tables) -- only consider analytial tables that were read
+            AND query_type = 'select'
+        GROUP BY instance_id, read_table_id
+        HAVING average_time_since_last_ingest_s > average_time_to_next_ingest_s --potential data freshness issues
+    """
 
 # Streamlit UI
-st.title("Real-Time Analytical vs Transform Count")
+st.title("Average times ingestion analytics")
 
 # Create an empty placeholder for the graph
 graph_placeholder = st.empty()
 
-'''
 # Function to fetch data and update the graph
 def update_graph():
     # Execute the SQL query
-    result_df = con.execute(analytical_vs_transform_count).fetchdf()
+    result_df = con.execute(average_times_ingestion_analytics).fetchdf()
 
     # Clean the data
     result_df['table_id'] = result_df['table_id'].astype(str)
     result_df.fillna(0, inplace=True)
-
+#Output == table
     # Create a bar chart comparing select_count and transform_count per table
     fig = px.bar(result_df, 
                  x='table_id', 
@@ -332,7 +314,7 @@ if st.button("Start Real-Time Updates"):
         time.sleep(5)  # Sleep for 5 seconds (adjust based on how frequently you want to update)
 else:
     st.write("Click the button to start real-time updates.")
-'''
+
 
     # ---- INSERT SQL ----
     
