@@ -35,12 +35,16 @@ def write_to_topic(batch, topic, producer, list_columns):
             raise ValueError("Expected 'batch' to be a pandas DataFrame.")
 
         # Select only relevant columns
-        selected_columns = batch[list_columns]
+        selected_columns = batch[list_columns].copy()  # Create a copy to avoid modifying original DataFrame
 
         if selected_columns.empty:
             print(f"Warning: No relevant columns found for topic '{topic}'.")
             return
         
+        # Convert datetime columns to string (ISO 8601 format)
+        for col in selected_columns.select_dtypes(include=['datetime64[ns]']).columns:
+            selected_columns[col] = selected_columns[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
         # Convert to a list of dictionaries (each row as a JSON object)
         json_payloads = selected_columns.to_dict(orient='records')
 
@@ -53,6 +57,7 @@ def write_to_topic(batch, topic, producer, list_columns):
 
     finally:
         producer.flush()
+
 
 def write_all_to_topic(batch, topic, producer):
     try:
@@ -208,7 +213,6 @@ def parquet_to_table(consumer, table, conn, columns,topic):
     data_list = []
     parquet_file = "kafka_data.parquet"
     
-    # Keep polling Kafka messages
     while True:
         msg = consumer.poll(timeout=1.0)
         if msg is None:
@@ -226,10 +230,10 @@ def parquet_to_table(consumer, table, conn, columns,topic):
             records = json.loads(message_value)
 
             if isinstance(records, dict):
-                records = [records]
+                records = [records]  # Ensure list format
 
             data_list.extend(records)
-            last_msg = msg   
+        
         except json.JSONDecodeError as e:
             print(f"Error decoding JSON: {e}")
 
@@ -238,24 +242,20 @@ def parquet_to_table(consumer, table, conn, columns,topic):
         return
 
     df = pd.DataFrame(data_list)
-
-    # Ensure column  (match DuckDB schema)
-
     df = df[columns]
 
+    if "arrival_timestamp" in df.columns:
+        df["arrival_timestamp"] = pd.to_datetime(df["arrival_timestamp"], errors='coerce')  # Handle parsing errors
 
     # Save as Parquet
     df.to_parquet(parquet_file, index=False)
-
-    ## SELECT FORM PARUQET DELETE WHERE 
-
+    time.sleep(1)
     # Get absolute path for DuckDB compatibility
     parquet_path = os.path.abspath(parquet_file)
 
     # Load into DuckDB
     conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
-    consumer.commit(message=last_msg,asynchronous=False) #commits offset to ensure that only new data is written to
-    print(f"✅ Successfully loaded {len(df)} rows into {table}.")
+    consumer.commit()  # Commit offset to ensure that only new data is written
 
 def check_duckdb_table(table_name, conn):
     """
@@ -351,7 +351,7 @@ def build_leaderboard_compiletime(con):
     ARGS:
         con: duckdb connected cursor
     '''
-    #time.sleep(.5)
+    time.sleep(.5)
     df1 = con.execute(f"""
     SELECT 
     instance_id, 

@@ -169,7 +169,7 @@ TOPIC_STRESS_INDEX = 'stressindex'
 
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
-COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations', 'mbytes_spilled']
+COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
 STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
                   'compile_duration_ms','execution_duration_ms',
                   'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
@@ -245,14 +245,15 @@ def initialize_duckdb():
 
 def create_consumer(topic, group_id):
     """Create a Confluent Kafka Consumer."""
-    consumer_t = Consumer({
+    consumer = Consumer({
         'bootstrap.servers': KAFKA_BROKER,
         'group.id': group_id,
-        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found, useful if consumer crashes
-        'enable.auto.commit': False        # Disable auto commit, ensure 
-    })
-    consumer_t.subscribe([topic])
-    return consumer_t
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found
+        'enable.auto.commit': False,       # Enable automatic commit
+        'enable.partition.eof': False,    # Avoid EOF issues
+        })
+    consumer.subscribe([topic])
+    return consumer
 
 
 def Kafka_topic_to_DuckDB():
@@ -266,32 +267,48 @@ def Kafka_topic_to_DuckDB():
     con = duckdb.connect(DUCKDB_FILE)
 
     print(f"Listening for messages on topic '{TOPIC_RAW_DATA}'...")
+    figure_keys = ["fig1", "fig2", "fig3", "fig4", "fig5", "fig6"]
+    for key in figure_keys:
+        if key not in st.session_state:
+            st.session_state[key] = go.Figure()
 
-    query_counter_table = st.empty()
+    fig1_placeholder = st.empty()
+    fig2_placeholder = st.empty()
+    fig3_placeholder = st.empty()
+    fig4_placeholder = st.empty()
+    fig5_placeholder = st.empty()
+    fig6_placeholder = st.empty()
 
     try:
         while True:
-            ddb.parquet_to_table(consumer_query_counter,'LIVE_QUERY_METRICS',con, QUERY_COLUMNS,TOPIC_QUERY_METRICS)
-            #ddb.parquet_to_table(consumer_leaderboard,'LIVE_LEADERBOARD',con, LEADERBOARD_COLUMNS,TOPIC_LEADERBOARD)
-            #ddb.parquet_to_table(consumer_compile,'LIVE_COMPILE_METRICS',con, COMPILE_COLUMNS,TOPIC_COMPILE_METRICS)
-            #fig1 = build_leaderboard_compiletime(con)
-            #fig2 = build_leaderboard_user_queries(con)
-            fig3 = build_live_query_counts(con)
-            fig4 = build_live_query_distribution(con)
-            #fig5 = build_live_compile_metrics(con)
-            #fig6 = build_live_spilled_scanned(con)
+            # load new data from Kafka
+            ddb.parquet_to_table(consumer_query_counter, 'LIVE_QUERY_METRICS', con, QUERY_COLUMNS, TOPIC_QUERY_METRICS)
+            ddb.parquet_to_table(consumer_leaderboard, 'LIVE_LEADERBOARD', con, LEADERBOARD_COLUMNS, TOPIC_LEADERBOARD)
+            ddb.parquet_to_table(consumer_compile, 'LIVE_COMPILE_METRICS', con, COMPILE_COLUMNS, TOPIC_COMPILE_METRICS)
+            # use session state to prevent flashin dashboard
+            st.session_state.fig1 = build_leaderboard_compiletime(con)
+            st.session_state.fig2 = build_leaderboard_user_queries(con)
+            st.session_state.fig3 = build_live_query_counts(con)
+            st.session_state.fig4 = build_live_query_distribution(con)
+            st.session_state.fig5 = build_live_compile_metrics(con)
+            st.session_state.fig6 = build_live_spilled_scanned(con)
+            uniq_id = str(int(time.time()))
+            with st.container():
+                col1, col2, col3 = st.columns(3)
 
-            with query_counter_table:
-                #st.plotly_chart(fig1)
-                #st.plotly_chart(fig2)
-                st.plotly_chart(fig3)
-                st.plotly_chart(fig4)
-                #st.plotly_chart(fig5)
-                #st.plotly_chart(fig6)
+                with col1:
+                    fig1_placeholder.plotly_chart(st.session_state.fig1, use_container_width=True,key=f"fig1_chart_{uniq_id}")
+                    fig2_placeholder.plotly_chart(st.session_state.fig2, use_container_width=True,key=f"fig2_chart_{uniq_id}")
 
+                with col2:
+                    fig3_placeholder.plotly_chart(st.session_state.fig3, use_container_width=True,key=f"fig3_chart_{uniq_id}")
+                    fig4_placeholder.plotly_chart(st.session_state.fig4, use_container_width=True,key=f"fig4_chart_{uniq_id}")
+
+                with col3:
+                    fig5_placeholder.plotly_chart(st.session_state.fig5, use_container_width=True,key=f"fig5_chart_{uniq_id}")
+                    fig6_placeholder.plotly_chart(st.session_state.fig6, use_container_width=True,key=f"fig6_chart_{uniq_id}")
+            # Wait before fetching new updates
             time.sleep(5)
-            st.rerun()  # Force Streamlit to re-run so it re-queries and re
-            ddb.check_duckdb_table('LIVE_QUERY_METRICS',con)
 
     except KeyboardInterrupt:
         print("\nStopping consumer...")
@@ -304,7 +321,6 @@ def Kafka_topic_to_DuckDB():
 
 
 ########### DuckDB to Dashboard ################
-import plotly.graph_objects as go
 
 def build_leaderboard_compiletime(con):
     '''
@@ -316,30 +332,36 @@ def build_leaderboard_compiletime(con):
     df1 = con.execute(f"""
     SELECT 
     instance_id, 
-    FLOOR(compile_duration_ms / 60000) || ':' || LPAD(FLOOR((compile_duration_ms % 60000) / 1000), 2, '0') AS compile_duration
+    compile_duration_ms as compile_duration,
     FROM LIVE_LEADERBOARD
     ORDER BY compile_duration_ms DESC
     LIMIT 10;
     """).df()
 
-    # Visualization: Horizontal Bar Chart using Plotly
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        y=df1['instance_id'],
-        x=df1['compile_duration'],
-        orientation='h',  # Horizontal bar
-        marker=dict(color='royalblue'),
-        text=df1['compile_duration'],
-        textposition='inside'
-    ))
+    df1['formatted_compile_time'] = df1['compile_duration'].apply(
+        lambda x: f"{int(x // 60000)}:{int((x % 60000) // 1000):02d}"
+    )
+
+    # Add rank column for leaderboard display
+    df1.insert(0, "Rank", range(1, len(df1) + 1))
+
+    fig = go.Figure(data=[go.Table(
+        columnwidth=[5, 10, 10],  # Adjust column widths for better layout
+        header=dict(values=["Rank", "Instance ID", "Compile Duration (mm:ss)"],
+                    fill_color="royalblue",
+                    font=dict(color="white", size=14),
+                    align="center"),
+        cells=dict(values=[df1["Rank"], df1["instance_id"], df1["formatted_compile_time"]],
+                   fill_color="black",
+                   font=dict(color="white", size=12),
+                   align="center"))
+    ])
 
     fig.update_layout(
-        title='Top 10 Compile Times',
-        xaxis_title='Compile Duration (mm:ss)',
-        yaxis_title='Instance ID',
-        template='plotly_dark'
+        title="Leaderboard: Top 10 Longest Compile Times",
+        template="plotly_dark"
     )
-    #fig.show()
+
     return fig
 
 def build_leaderboard_user_queries(con):
@@ -376,7 +398,6 @@ def build_leaderboard_user_queries(con):
     #fig.show()
     return fig
 
-
 def build_live_query_counts(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
@@ -385,59 +406,68 @@ def build_live_query_counts(con):
     returns dataframe containing total, aborted, and cached query counts
     '''
     df = con.execute(f"""
-    SELECT 
-    COUNT(*) AS total_queries,
-    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
-    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
-    FROM LIVE_QUERY_METRICS;
+        SELECT 
+            query_type, 
+            COUNT(*) AS occurrence_count
+        FROM LIVE_QUERY_METRICS
+        GROUP BY query_type
+        ORDER BY occurrence_count DESC;
     """).df()
 
-    # Visualization: Pie Chart using Plotly
-    fig = go.Figure(data=[go.Pie(
-        labels=['Total Queries', 'Aborted Queries', 'Cached Queries'],
-        values=[df['total_queries'][0], df['aborted_queries'][0], df['cached_queries'][0]],
-        hole=0.3,  # makes it a donut chart
-        marker=dict(colors=['#007bff', '#ff4c4c', '#00cc99'])
-    )])
+    # Visualization: Bar Chart using Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df['query_type'],
+        y=df['occurrence_count'],
+        marker=dict(color=px.colors.qualitative.Plotly),  # Dynamic colors
+        text=df['occurrence_count'],  # Show counts on bars
+        textposition='auto'
+    ))
 
     fig.update_layout(
-        title='Query Distribution (Total, Aborted, Cached)',
+        title='Query Type Distribution',
+        xaxis_title='Query Type',
+        yaxis_title='Occurrences',
         template='plotly_dark'
     )
-    #fig.show()
+
     return fig
 
 def build_live_query_distribution(con):
     '''
     PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
-    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called.
     
-    returns dataframe containing counts of total, aborted, and cached queries
+    Generates a Pie Chart representing the distribution of query types.
     '''
     df = con.execute(f"""
-    SELECT 
-    query_type, 
-    COUNT(*) AS occurrence_count
-    FROM LIVE_QUERY_METRICS
-    GROUP BY query_type
-    ORDER BY occurrence_count DESC;
+        SELECT 
+            query_type, 
+            COUNT(*) AS occurrence_count
+        FROM LIVE_QUERY_METRICS
+        GROUP BY query_type
+        ORDER BY occurrence_count DESC;
     """).df()
 
-    # Visualization: Stacked Bar Chart using Plotly
-    fig = go.Figure(data=[
-        go.Bar(name='Total Queries', x=['Queries'], y=[df['total_queries'][0]], marker=dict(color='#007bff')),
-        go.Bar(name='Aborted Queries', x=['Queries'], y=[df['aborted_queries'][0]], marker=dict(color='#ff4c4c')),
-        go.Bar(name='Cached Queries', x=['Queries'], y=[df['cached_queries'][0]], marker=dict(color='#00cc99'))
-    ])
+    # Check if the DataFrame is empty
+    if df.empty:
+        st.warning("No query data available.")
+        return go.Figure()  # Return an empty figure
+
+    # Visualization: Pie Chart using Plotly
+    fig = go.Figure(data=[go.Pie(
+        labels=df['query_type'], 
+        values=df['occurrence_count'], 
+        hole=0.3,  # Donut Chart effect
+        marker=dict(colors=px.colors.qualitative.Plotly),  # Dynamic colors
+        textinfo='label+percent'  # Show both label and percentage
+    )])
 
     fig.update_layout(
-        title='Query Distribution (Total, Aborted, Cached)',
-        barmode='stack',
-        xaxis_title='Query Type',
-        yaxis_title='Query Count',
+        title='Query Type Distribution',
         template='plotly_dark'
     )
-    #fig.show()
+
     return fig
 
 def build_live_compile_metrics(con):
@@ -448,17 +478,17 @@ def build_live_compile_metrics(con):
     returns dataframe containing sum of scans, aggregates, and joins
     '''
     df = con.execute(f"""
-    SELECT 
+    SELECT
     SUM(num_scans) AS total_scans,
-    SUM(num_aggregates) AS total_aggregates,
-    SUM(num_join) AS total_joins
+    SUM(num_aggregations) AS total_aggregations,
+    SUM(num_joins) AS total_joins
     FROM LIVE_COMPILE_METRICS;
     """).df()
 
     # Visualization: Stacked Bar Chart using Plotly
     fig = go.Figure(data=[
         go.Bar(name='Scans', x=['Metrics'], y=[df['total_scans'][0]], marker=dict(color='blue')),
-        go.Bar(name='Aggregates', x=['Metrics'], y=[df['total_aggregates'][0]], marker=dict(color='orange')),
+        go.Bar(name='Aggregates', x=['Metrics'], y=[df['total_aggregations'][0]], marker=dict(color='orange')),
         go.Bar(name='Joins', x=['Metrics'], y=[df['total_joins'][0]], marker=dict(color='green'))
     ])
 
@@ -482,8 +512,8 @@ def build_live_spilled_scanned(con):
     '''
     df = con.execute(f"""
     SELECT 
-    SUM(mb_spilled) AS mb_spilled,
-    SUM(mb_scanned) AS mb_scanned
+    SUM(mbytes_spilled) AS mb_spilled,
+    SUM(mbytes_scanned) AS mb_scanned
     FROM LIVE_COMPILE_METRICS;
     """).df()
 
