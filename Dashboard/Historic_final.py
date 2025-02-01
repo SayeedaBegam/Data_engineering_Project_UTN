@@ -226,13 +226,13 @@ def historical_view_graphs():
     # Creates a table to store the flattened write and read table ids
     # Here the Kafka topic will write into.
     create_flattened_table_ids_table = """
-    CREATE OR REPLACE TABLE flattened_table_ids_table AS
-          instance_id int32,
-          query_id int64,
-          write_table_id int64,
-          read_table_id int64,
-          arrival_timestamp timestamp,
-          query_table varchar
+        CREATE OR REPLACE TABLE flattened_table_ids(
+            instance_id int32,
+            query_id int64,
+            write_table_id int64,
+            read_table_id int64,
+            arrival_timestamp timestamp,
+            query_type varchar)
       """
      # Create flattend read and write table ids table
     con.execute(create_flattened_table_ids_table)
