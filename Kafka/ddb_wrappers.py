@@ -24,7 +24,7 @@ TOPIC_STRESS_INDEX = 'stressindex'
 
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
-COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations', 'mbytes_spilled']
+COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
 STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
                   'compile_duration_ms','execution_duration_ms',
                   'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
@@ -101,14 +101,17 @@ def create_kafka_topic(topic_name, num_partitions, replication_factor):
     except Exception as e:
         print(f"Error creating topic '{topic_name}': {e}")
 
+
 def create_consumer(topic, group_id):
     """Create a Confluent Kafka Consumer."""
-    return Consumer({
+    consumer_t = Consumer({
         'bootstrap.servers': KAFKA_BROKER,
         'group.id': group_id,
-        'auto.offset.reset': 'earliest',  # Start reading from the beginning
-        'enable.auto.commit': True       # Automatically commit offsets
-    }, logger=None)
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found, useful if consumer crashes
+        'enable.auto.commit': False        # Disable auto commit, ensure 
+    })
+    consumer_t.subscribe([topic])
+    return consumer_t
 
 def create_all_topics():
     create_kafka_topic('durations', num_partitions = 3)
@@ -250,9 +253,8 @@ def parquet_to_table(consumer, table, conn, columns,topic):
 
     # Load into DuckDB
     conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
-
+    consumer.commit(asynchronous=False) #commits offset to ensure that only new data is written to
     print(f"✅ Successfully loaded {len(df)} rows into {table}.")
-    purge_kafka_topic(topic)
 
 def check_duckdb_table(table_name, conn):
     """
@@ -337,3 +339,132 @@ def analyze_query_counter(producer, batch, counter):
         producer.produce(TOPIC_QUERY_COUNTER, value=json.dumps(counter))
     except Exception as e:
         print(f"Error: {e}")
+
+def build_leaderboard_compiletime(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
+    con,LEADERBOARD_COLUMNS,TOPIC_LEADERBOARD) has already been called
+    
+    returns dataframe continaing top 10 compile times and their instance_id
+    
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    time.sleep(.5)
+    df1 = con.execute(f"""
+    SELECT 
+    instance_id, 
+    FLOOR(compile_duration_ms / 60000) || ':' || LPAD(FLOOR((compile_duration_ms % 60000) / 1000), 2, '0') AS compile_duration
+    FROM LIVE_LEADERBOARD
+    ORDER BY compile_duration_ms DESC
+    LIMIT 10;
+    """).df()
+    return df1
+
+def build_leaderboard_user_queries(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
+    con,LEADERBOARD_COLUMNS,TOPIC_LEADERBOARD) has already been called
+    returns dataframe continaing top 5 user_ids who issued most queries
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    time.sleep(.5)
+    df =  con.execute(f"""
+                       SELECT user_id, COUNT(*) as most_queries
+                       FROM LIVE_LEADERBOARD
+                       ORDER BY most_queries DESC
+                       LIMIT 5;
+                       """)
+    return df
+
+def build_live_query_counts(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_LEADERBOARD', 
+    con,LEADERBOARD_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe continaing top 5 user_ids who issued most queries
+    ARGS:
+        con: duckdb connected cursor
+    '''
+
+    df = con.execute(
+        """
+    SELECT 
+    COUNT(*) AS total_queries,
+    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
+    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
+    FROM LIVE_QUERY_METRICS;
+    """).df()
+    return df
+
+def build_live_query_distribution(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe unique instances of query typesa nd the counts
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    COUNT(*) AS total_queries,
+    SUM(CASE WHEN was_aborted = TRUE THEN 1 ELSE 0 END) AS aborted_queries,
+    SUM(CASE WHEN was_cached = TRUE THEN 1 ELSE 0 END) AS cached_queries
+    FROM LIVE_QUERY_METRICS;
+    """).df()
+    return df
+
+def build_live_compile_metrics(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe sum of joins, inserts, and aggregations
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    SUM(num_scans) AS total_scans,
+    SUM(num_aggregates) AS total_aggregates,
+    SUM(num_join) AS total_joins
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+    return df
+
+def build_live_compile_metrics(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe sum of joins, inserts, and aggregations
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    SUM(num_scans) AS total_scans,
+    SUM(num_aggregates) AS total_aggregates,
+    SUM(num_join) AS total_joins
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+    return df
+
+def build_live_spilled_scanned(con):
+    '''
+    PREREQUISITIES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
+    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
+    returns dataframe sum of joins, inserts, and aggregations
+    ARGS:
+        con: duckdb connected cursor
+    '''
+    df = con.execute(
+        """
+    SELECT 
+    SUM(mb_spilled) AS mb_spilled,
+    SUM(mb_scanned) AS mb_scanned,
+    FROM LIVE_COMPILE_METRICS;
+    """).df()
+    return df
+

@@ -28,9 +28,13 @@ TOPIC_STRESS_INDEX = 'stressindex'
 LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
 QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
 COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
-STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
-                  'compile_duration_ms','execution_duration_ms',
-                  'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
+STRESS_COLUMNS = ['execution_duration_ms']
+
+## Expert Analytics
+
+TOPIC_FLAT_TABLES = 'flattened'
+FLAT_COLUMNS = ['instance_id','query_id','write_table_id','read_table_id','arrival_timestamp','query_table']
+
 
 QUERY_METRIC_COLUMNS = [
 'query_type',
@@ -96,7 +100,7 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
             # Use time difference between batches to simulate real time
             curr_batch_end = batch['arrival_timestamp'].iloc[-1]
             next_batch_start = df[df['batch_id'] == batch_id + 1]['arrival_timestamp'].iloc[0]
-            delay_stream(curr_batch_end, next_batch_start)
+            #delay_stream(curr_batch_end, next_batch_start)
 
     producer.flush()
     print("Batch over")
@@ -135,7 +139,7 @@ def type_cast_batch(batch):
         "num_external_tables_accessed": "float64",
         "num_system_tables_accessed": "float64",
         "read_table_ids": "string",
-        "write_table_ids": "float64",
+        "write_table_ids": "string",
         "mbytes_scanned": "float64",
         "mbytes_spilled": "float64",
         "num_joins": "Int64",
