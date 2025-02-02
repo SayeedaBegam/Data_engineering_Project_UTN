@@ -7,9 +7,9 @@ import time
 from collections import deque
 from ksql import KSQLAPI
 import requests
-import ddb_wrappers as ddb
+#import ddb_wrappers as ddb
 import duckdb
-DUCKDB_FILE = "data.duckdb"
+DUCKDB_FILE = "cleaned_data.duckdb"
 
 
 # Start zookeper server: bin/zookeeper-server-start etc/kafka/zookeeper.properties
@@ -51,8 +51,6 @@ QUERY_METRIC_COLUMNS = [
 'num_aggregations']
 
 
-
-
 def send_to_kafka(producer, topic, chunk):
     """Send data to Kafka"""
     for record in chunk.to_dict(orient='records'):
@@ -88,12 +86,12 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
         try:
             send_to_kafka(producer, TOPIC_RAW_DATA, batch)
             print(f"Batch {batch_id} sent to Kafka successfully.")
-            write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
-            write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
-            write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
-            write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
+            #write_to_topic(batch,TOPIC_LEADERBOARD,producer,LEADERBOARD_COLUMNS)
+            #write_to_topic(batch,TOPIC_QUERY_METRICS,producer,QUERY_COLUMNS)
+            #write_to_topic(batch,TOPIC_COMPILE_METRICS,producer,COMPILE_COLUMNS)
+            #write_to_topic(batch,TOPIC_STRESS_INDEX,producer,STRESS_COLUMNS)
             # TESTING
-            #write_to_topic(batch,TOPIC_FLAT_TABLES,producer,FLAT_COLUMNS)
+            write_to_topic(batch,TOPIC_FLAT_TABLES,producer,FLAT_COLUMNS)
         except Exception as e:
             print(f"Error: {e}")
         print("Finished streaming data to Kafka.")
@@ -102,16 +100,16 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
             # Use time difference between batches to simulate real time
             curr_batch_end = batch['arrival_timestamp'].iloc[-1]
             next_batch_start = df[df['batch_id'] == batch_id + 1]['arrival_timestamp'].iloc[0]
-            #delay_stream(curr_batch_end, next_batch_start)
+            delay_stream(curr_batch_end, next_batch_start)
 
     producer.flush()
     print("Batch over")
 
 def delay_stream(batch_start, next_batch_start):
-    scaling_factor = 6480 / 4  # Scaling factor to compress 3 months of data in 20 mins
+    scaling_factor = 6480   # Scaling factor to compress 3 months of data in 20 mins
     time_diff = (next_batch_start - batch_start).total_seconds()
     delay = time_diff / scaling_factor
-    min_delay = 0.25
+    min_delay = 1
     time.sleep(max(delay, min_delay))
 
 def type_cast_batch(batch):
@@ -219,6 +217,7 @@ def write_to_topic(batch, topic, producer, list_columns):
         # Send each record individually
         for record in json_payloads:
             #print(record)
+            print(record)
             producer.produce(topic, value=json.dumps(record))
 
     except Exception as e:
@@ -227,11 +226,76 @@ def write_to_topic(batch, topic, producer, list_columns):
     finally:
         producer.flush()
 
+def parquet_to_table(consumer, table, conn, columns,topic):
+    """
+    Reads messages from a Kafka consumer, extracts data from JSON, writes to Parquet,
+    and loads into a DuckDB table.
+    
+    Args:
+        consumer: Kafka consumer instance.
+        table: DuckDB table name.
+        conn: DuckDB connection.
+    """
+    data_list = []
+    parquet_file = f"kafka_data_{table}.parquet"
+    
+    while True:
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            break  # Stop polling when there are no more messages
+        
+        if msg.error():
+            print(f"Kafka Error: {msg.error()}")
+            continue  # Skip errors and keep polling
+
+        # Deserialize JSON Kafka message
+        message_value = msg.value().decode('utf-8')
+
+        try:
+            # Convert JSON string to dictionary
+            records = json.loads(message_value)
+
+            if isinstance(records, dict):
+                records = [records]  # Ensure list format
+
+            data_list.extend(records)
+        
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON: {e}")
+
+    if not data_list:  # If no data was received, exit function early
+        print("No data received from Kafka.")
+        return
+
+    df = pd.DataFrame(data_list)
+    df = df[columns]
+
+    if "arrival_timestamp" in df.columns:
+        df["arrival_timestamp"] = pd.to_datetime(df["arrival_timestamp"], errors='coerce')  # Handle parsing errors
+    if topic == 'flattened':
+        df['read_table_ids'] = df['read_table_ids'].astype(str).str.split(",")
+        df = df.explode('read_table_ids', ignore_index=True)
+
+        # Handle None/NaN values before conversion
+        df['read_table_ids'] = pd.to_numeric(df['read_table_ids'], errors='coerce')
+
+        # Convert to nullable integer type (allows NaN values)
+        df['read_table_ids'] = df['read_table_ids'].astype(pd.Int64Dtype())
+
+    # Save as Parquet
+    df.to_parquet(parquet_file, index=False)
+    time.sleep(4)
+    # Get absolute path for DuckDB compatibility
+    parquet_path = os.path.abspath(parquet_file)
+
+    # Load into DuckDB
+    conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
+    consumer.commit()  # Commit offset to ensure that only new data is written
 
 
 def main():
     parquet_file = 'sample_0.001.parquet'  # Parquet file name
-    batch_size = 2  # Batch size
+    batch_size = 10  # Batch size
 
     stream_parquet_to_kafka(parquet_file, batch_size)
 
