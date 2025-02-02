@@ -711,7 +711,6 @@ def parquet_to_table(consumer, table, conn, columns,topic):
         df['read_table_ids'] = df['read_table_ids'].astype(pd.Int64Dtype())
 
     print(df)
-    print(df)
     # Save as Parquet
     df.to_parquet(parquet_file, index=False)
     time.sleep(4)
@@ -723,10 +722,10 @@ def parquet_to_table(consumer, table, conn, columns,topic):
     consumer.commit()  # Commit offset to ensure that only new data is written
 
 
-if view_mode == "Historical View":
+if view_mode == "Instance View":
     Kafka_topic_to_DuckDB()
 
-elif view_mode == "Live View":
+elif view_mode == "Aggregate View":
     Kafka_topic_to_DuckDB()
 
 # Footer: 
