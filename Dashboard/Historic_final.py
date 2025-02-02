@@ -256,13 +256,14 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
 ##################OTHER ANALYTICAL QUERIES############################
 def historical_view_graphs():
 
-# SQL Query for Analytical vs Transform Count
+def historical_view_graphs():
+    # SQL Query for Analytical vs Transform Count
     average_times_ingestion_analytics = """
         WITH analytical_tables AS (
         SELECT  -- get the tables that are identified as tables for analytical workflow
             instance_id,
             table_id,
-        CAST(COALESCE(select_count / (transform_count + select_count), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
+            CAST(COALESCE(select_count / (transform_count + select_count), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
         FROM tables_workload_count
         WHERE percentage_select_queries > 0.80  
         )
@@ -281,39 +282,46 @@ def historical_view_graphs():
         --HAVING average_time_since_last_ingest_s > average_time_to_next_ingest_s --potential data freshness issues
     """
 
-# Streamlit UI
-st.title("Average times ingestion analytics")
+    # Streamlit UI
+    st.title("Average Times Ingestion Analytics")
 
-# Create an empty placeholder for the graph
-graph_placeholder = st.empty()
+    # Create a placeholder for the table
+    table_placeholder = st.empty()  # Placeholder for dynamic updates
 
-# Function to fetch data and update the graph
-def update_graph():
-    # Execute the SQL query
-    result_df = con.execute(average_times_ingestion_analytics).fetchdf()
+    # Function to fetch data and display the table
+    def update_table():
+        # Execute the SQL query
+        result_df = con.execute(average_times_ingestion_analytics).fetchdf()
 
-    # Clean the data
-    result_df['table_id'] = result_df['table_id'].astype(str)
-    result_df.fillna(0, inplace=True)
-#Output == table
-    # Create a bar chart comparing select_count and transform_count per table
-    fig = px.bar(result_df, 
-                 x='table_id', 
-                 y=['select_count', 'transform_count'], 
-                 title="Select vs Transform Counts by Table",
-                 labels={'table_id': 'Table ID', 'value': 'Count'},
-                 barmode='group')  # Group bars for select_count and transform_count
+        # Clean the data
+        result_df['read_table_id'] = result_df['read_table_id'].astype(str)  # Ensure IDs are strings
+        result_df.fillna(0, inplace=True)  # Replace NaN values with 0 for clarity
 
-    # Update the placeholder with the new graph
-    graph_placeholder.plotly_chart(fig, use_container_width=True)
+        # Display the table in a smaller width container
+        st.markdown(
+            """
+            <style>
+            .dataframe-container {
+                width: 600px;  /* Set a smaller width for the table */
+                margin: 0 auto;  /* Center the table */
+                border: 1px solid #ddd;  /* Add a border for better visuals */
+                border-radius: 8px;  /* Rounded corners */
+                box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);  /* Add shadow effect */
+            }
+            </style>
+            """, unsafe_allow_html=True
+        )
 
-# Simulate periodic updates (e.g., every 5 seconds)
-if st.button("Start Real-Time Updates"):
-    while True:
-        update_graph()  # Update the graph with fresh data
-        time.sleep(5)  # Sleep for 5 seconds (adjust based on how frequently you want to update)
-else:
-    st.write("Click the button to start real-time updates.")
+        # Render the table
+        table_placeholder.dataframe(result_df, use_container_width=False)  # Do not use full width
+
+    # Real-time updates or manual refresh
+    if st.button("Start Real-Time Updates"):
+        while True:
+            update_table()  # Fetch and display fresh data as a table
+            time.sleep(5)  # Update every 5 seconds
+    else:
+        st.write("Click the button to start real-time updates.")
 
 
     # ---- INSERT SQL ----
