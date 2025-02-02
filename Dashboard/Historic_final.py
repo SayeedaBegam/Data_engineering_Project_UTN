@@ -446,17 +446,23 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
 
 ##################OTHER ANALYTICAL QUERIES############################
 
-
-def historical_view_graphs():
+def build_historical_ingestion_table(con):
+    """
+    PREREQUISITES: parquet_to_table(consumer,'OUTPUT_TABLE', 
+    con, HISTORICAL_COLUMNS, TOPIC_HISTORICAL) has already been called.
     
-    average_times_ingestion_analytics = """
+    Returns a table containing instance_id, read_table_id, 
+    average time since last ingest, and average time to next ingest.
+    """
+
+    df = con.execute("""
         WITH analytical_tables AS (
-        SELECT  -- get the tables that are identified as tables for analytical workflow
-            instance_id,
-            table_id,
-            CAST(COALESCE(select_count / (transform_count + select_count), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
-        FROM tables_workload_count
-        WHERE percentage_select_queries > 0.80  
+            SELECT  
+                instance_id,
+                table_id,
+                CAST(COALESCE(select_count / (transform_count + select_count), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
+            FROM tables_workload_count
+            WHERE percentage_select_queries > 0.80  
         )
         SELECT 
             instance_id, 
@@ -464,55 +470,42 @@ def historical_view_graphs():
             CAST(AVG(time_since_last_ingest_ms) / 1000.0 AS DECIMAL(20, 0)) AS average_time_since_last_ingest_s, 
             CAST(AVG(time_to_next_ingest_ms) / 1000.0 AS DECIMAL(20, 0)) AS average_time_to_next_ingest_s
         FROM output_table
-        WHERE 1 
-            AND read_table_id IN ( 
-                SELECT table_id
-                FROM analytical_tables) -- only consider analytial tables that were read
+        WHERE read_table_id IN (SELECT table_id FROM analytical_tables)  
             AND query_type = 'select'
-        GROUP BY instance_id, read_table_id
-        --HAVING average_time_since_last_ingest_s > average_time_to_next_ingest_s --potential data freshness issues
-    """
+        GROUP BY instance_id, read_table_id;
+    """).df()
 
-    # Streamlit UI
-    st.title("Average Times Ingestion Analytics")
+    # Ensure data is formatted correctly
+    df['read_table_id'] = df['read_table_id'].astype(str)  # Convert IDs to string for proper display
+    df.fillna(0, inplace=True)  # Handle NaN values
 
-    # Create a placeholder for the table
-    table_placeholder = st.empty()  # Placeholder for dynamic updates
-
-    # Function to fetch data and display the table
-    def update_table():
-        # Execute the SQL query
-        result_df = con.execute(average_times_ingestion_analytics).fetchdf()
-
-        # Clean the data
-        result_df['read_table_id'] = result_df['read_table_id'].astype(str)  # Ensure IDs are strings
-        result_df.fillna(0, inplace=True)  # Replace NaN values with 0 for clarity
-
-        # Display the table in a smaller width container
-        st.markdown(
-            """
-            <style>
-            .dataframe-container {
-                width: 600px;  /* Set a smaller width for the table */
-                margin: 0 auto;  /* Center the table */
-                border: 1px solid #ddd;  /* Add a border for better visuals */
-                border-radius: 8px;  /* Rounded corners */
-                box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);  /* Add shadow effect */
-            }
-            </style>
-            """, unsafe_allow_html=True
+    # Display Table
+    fig = go.Figure(data=[go.Table(
+        columnwidth=[5, 10, 10, 10],  # Adjust column widths for better layout
+        header=dict(
+            values=["Instance ID", "Read Table ID", "Avg Time Since Ingest (s)", "Avg Time to Next Ingest (s)"],
+            fill_color="royalblue",
+            font=dict(color="white", size=14),
+            align="center"
+        ),
+        cells=dict(
+            values=[df["instance_id"], df["read_table_id"], df["average_time_since_last_ingest_s"], df["average_time_to_next_ingest_s"]],
+            fill_color="black",
+            font=dict(color="white", size=12),
+            align="center"
         )
+    )])
 
-        # Render the table
-        table_placeholder.dataframe(result_df, use_container_width=False)  # Do not use full width
+    # Layout Configurations
+    fig.update_layout(
+        title="Historical Ingestion Metrics",
+        template="plotly_dark",
+        width=750,  # Set a smaller width for compact display
+        height=300  # Reduce height for better UI
+    )
 
-    # Real-time updates or manual refresh
-    if st.button("Start Real-Time Updates"):
-        while True:
-            update_table()  # Fetch and display fresh data as a table
-            time.sleep(5)  # Update every 5 seconds
-    else:
-        st.write("Click the button to start real-time updates.")
+    return fig
+
 
 
     # ---- INSERT SQL ----
@@ -540,7 +533,7 @@ def historical_view_graphs():
 if view_mode == "Instance View":
     display_metrics()  
     real_time_graph_in_historical_view()
-    historical_view_graphs()  
+    build_historical_ingestion_table()  
     
 
 # Footer: Add a custom footer
