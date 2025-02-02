@@ -7,18 +7,31 @@ import duckdb
 from datetime import datetime
 from numerize import numerize
 import time
+import pandas as pd
+from confluent_kafka import Producer, Consumer
+from confluent_kafka.admin import AdminClient, NewTopic, ConfigResource
+import json
+import pyarrow.parquet as pq
+import time
+from collections import deque
+from ksql import KSQLAPI
+import requests
+import duckdb
+import os
+
 # Set up the page layout
 st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
 st.header("Redset Dashboard")
 
 # DuckDB Database File Path
 DUCKDB_FILE = "cleaned_data.duckdb"
+KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
 
 # Connect to the DuckDB database
 con = duckdb.connect(DUCKDB_FILE)
 
 # Load data from DuckDB
-df = con.execute("SELECT * FROM cleaned_data").fetchdf()
+df = con.execute("SELECT * FROM flattened_table_ids").fetchdf()
 
 # Strip any extra spaces in column names
 df.columns = df.columns.str.strip()
@@ -85,6 +98,168 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+
+
+def calculate_stress(consumer, long_avg, short_avg):
+    """
+    Reads the latest message from Kafka, updates the running averages, and exits.
+
+    Args:
+        consumer: Kafka consumer instance.
+        long_avg: Initial long-term running average.
+        short_avg: Initial short-term running average.
+
+    Returns:
+        Tuple (short_avg, long_avg) after processing the latest message.
+    """
+    long_alpha = 0.0002  # Long-term averaging factor
+    short_alpha = 0.02   # Short-term averaging factor
+
+    # Poll once to get the latest message
+    msg = consumer.poll(timeout=1.0)
+
+    if msg is None or msg.value() is None:
+        print("No new messages in Kafka. Exiting...")
+        #consumer.close()
+        return short_avg, long_avg  # Return unchanged averages if no message was found
+
+    if msg.error():
+        print(f"Kafka Error: {msg.error()}")
+        #consumer.close()
+        return short_avg, long_avg  # Return unchanged averages on error
+
+    try:
+        # Decode and parse JSON message
+        message_value = msg.value().decode('utf-8')
+        message_dict = json.loads(message_value)
+
+        # Convert execution duration to float
+        execution_duration = float(message_dict["execution_duration_ms"])
+        mb_spilled = message_dict["mbytes_spilled"]
+
+        # Compute running averages
+        long_avg = (long_alpha * execution_duration) + (1 - long_alpha) * long_avg
+        short_avg = (short_alpha * execution_duration) + (1 - short_alpha) * short_avg
+
+        print(f"Updated Averages → Short: {short_avg}, Long: {long_avg}")
+
+        # Commit offset (optional if auto-commit is disabled)
+        consumer.commit()
+
+    except json.JSONDecodeError as e:
+        print(f"JSON Decode Error: {e}")
+    except ValueError as e:
+        print(f"ValueError converting execution_duration_ms: {e}")
+
+    # Close consumer and exit
+    #consumer.close()
+    return short_avg, long_avg
+
+
+def check_duckdb_table(table_name, conn):
+    """
+    Verifies if a table exists and has data in DuckDB.
+    
+    :param table_name: Name of the table to check.
+    :param conn: DuckDB connection object.
+    :return: Tuple (exists, row_count)
+    """
+    try:
+        # Check if the table exists
+        table_exists = conn.execute(
+            f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{table_name}'"
+        ).fetchone()[0] > 0
+
+        if not table_exists:
+            print(f"Table '{table_name}' does NOT exist in DuckDB.")
+            return False, 0
+
+        # Check if the table has data
+        row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+        
+        if row_count > 0:
+            print(f"Table '{table_name}' exists and contains {row_count} rows.")
+            
+            # Optionally show the first few rows
+            df_preview = conn.execute(f"SELECT * FROM {table_name}").df()
+            print("Table Preview:")
+            print(df_preview)
+            
+        else:
+            print(f"Table '{table_name}' exists but is EMPTY.")
+
+        return True, row_count
+
+    except Exception as e:
+        print(f"Error checking table '{table_name}': {e}")
+        return False, 0
+
+
+def parquet_to_table(consumer, table, conn, columns,topic):
+    """
+    Reads messages from a Kafka consumer, extracts data from JSON, writes to Parquet,
+    and loads into a DuckDB table.
+    
+    Args:
+        consumer: Kafka consumer instance.
+        table: DuckDB table name.
+        conn: DuckDB connection.
+    """
+    data_list = []
+    parquet_file = f"kafka_data_{table}.parquet"
+    
+    while True:
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            break  # Stop polling when there are no more messages
+        
+        if msg.error():
+            print(f"Kafka Error: {msg.error()}")
+            continue  # Skip errors and keep polling
+
+        # Deserialize JSON Kafka message
+        message_value = msg.value().decode('utf-8')
+
+        try:
+            # Convert JSON string to dictionary
+            records = json.loads(message_value)
+
+            if isinstance(records, dict):
+                records = [records]  # Ensure list format
+
+            data_list.extend(records)
+        
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON: {e}")
+
+    if not data_list:  # If no data was received, exit function early
+        print("No data received from Kafka.")
+        return
+
+    df = pd.DataFrame(data_list)
+    df = df[columns]
+
+    if "arrival_timestamp" in df.columns:
+        df["arrival_timestamp"] = pd.to_datetime(df["arrival_timestamp"], errors='coerce')  # Handle parsing errors
+    if topic == 'flattened':
+        df['read_table_ids'] = df['read_table_ids'].astype(str).str.split(",")
+        df = df.explode('read_table_ids', ignore_index=True)
+
+        # Handle None/NaN values before conversion
+        df['read_table_ids'] = pd.to_numeric(df['read_table_ids'], errors='coerce')
+
+        # Convert to nullable integer type (allows NaN values)
+        df['read_table_ids'] = df['read_table_ids'].astype(pd.Int64Dtype())
+
+    # Save as Parquet
+    df.to_parquet(parquet_file, index=False)
+    time.sleep(4)
+    # Get absolute path for DuckDB compatibility
+    parquet_path = os.path.abspath(parquet_file)
+
+    # Load into DuckDB
+    conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
+    consumer.commit()  # Commit offset to ensure that only new data is written
 
 # Function to display metrics with subtle colors
 def display_metrics():
@@ -182,14 +357,17 @@ df['arrival_timestamp'] = pd.to_datetime(df['arrival_timestamp'], errors='coerce
 
 ############# STRESS INDEX QUERY ##########################################
 def real_time_graph_in_historical_view():
+    consumer = Consumer({
+        'bootstrap.servers': KAFKA_BROKER,
+        'group.id': 'analytics',
+        'auto.offset.reset': 'earliest',  # Read from the beginning if no offset found
+        'enable.auto.commit': False,       # Enable automatic commit
+        'enable.partition.eof': False,    # Avoid EOF issues
+        })
     # Initialize Kafka consumer (replace with actual consumer setup)
-    conf = {
-        'bootstrap.servers': 'localhost:9092',  # Kafka broker address
-        'group.id': 'stress-index-consumer',
-        'auto.offset.reset': 'earliest'
-    }
+
     #consumer = Consumer(conf)
-    consumer.subscribe(['TOPIC_FLAT_TABLES'])  
+    consumer.subscribe('flattened')  
 
     long_avg = 0.0  # Initial value for long-term average
     short_avg = 0.0  # Initial value for short-term average
