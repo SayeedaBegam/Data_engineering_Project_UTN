@@ -312,6 +312,27 @@ def Kafka_topic_to_DuckDB():
                     )            # Wait before fetching new updates
             time.sleep(1)
 
+                # First Row: Compile Time Leaderboard (Left) & Query Distribution (Right)
+            with st.container():
+                col1, col2 = st.columns(2)  # Two columns
+                
+                with col1:  # Left Column
+                    st.plotly_chart(st.session_state.fig1, config={"responsive": True}, use_container_width=True)
+                
+                with col2:  # Right Column
+                    st.plotly_chart(st.session_state.fig4, config={"responsive": True}, use_container_width=True)
+            
+            # Second Row: User Queries (Left) & Compile Metrics (Right)
+            with st.container():
+                col3, col4 = st.columns(2)
+                
+                with col3:  # Left Column
+                    st.plotly_chart(st.session_state.fig2, config={"responsive": True}, use_container_width=True)
+                
+                with col4:  # Right Column
+                    st.plotly_chart(st.session_state.fig5, config={"responsive": True}, use_container_width=True)
+
+
     except KeyboardInterrupt:
         print("\nStopping consumer...")
     finally:
