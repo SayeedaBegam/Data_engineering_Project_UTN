@@ -14,7 +14,7 @@ import random
 import ddb_wrappers as ddb
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
+from streamlit_autorefresh import st_autorefresh
 
 # Initialize the Streamlit layout and options
 st.set_page_config(page_title="Redset Dashboard", page_icon="pipeline.png", layout="wide")
@@ -22,10 +22,9 @@ st.header("Redset Dashboard")
 
 # Sidebar configuration
 st.sidebar.header("Menu")
-view_mode = st.sidebar.radio("Select View", ("Historic View", "Live View"))
+view_mode = st.sidebar.radio("Select View", ("Instance view", "Aggregate View"))
 
 
-# Add custom styling (CSS) for Query Counter and Leaderboard
 st.markdown("""
     <style>
     body {
@@ -100,23 +99,28 @@ st.markdown("""
     .leaderboard-container {
         margin-top: 30px;
         padding: 20px;
-        background-color: #fff;
+        background: linear-gradient(to right, #e3f2fd, #bbdefb);
         border-radius: 10px;
         box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     }
 
     .leaderboard-header {
-        font-size: 24px;
+        font-size: 26px;
         font-weight: bold;
         text-align: center;
         margin-bottom: 20px;
-        color: #4CAF50;
+        color: #ffcc00;
     }
 
+    /* Leaderboard Table Styling */
     .leaderboard-table {
         width: 100%;
         border-collapse: collapse;
         margin-top: 15px;
+        background-color: white;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
     }
 
     .leaderboard-table th, .leaderboard-table td {
@@ -124,35 +128,45 @@ st.markdown("""
         text-align: center;
         font-size: 18px;
         color: #333;
-        border: 1px solid #ddd;
+        border-bottom: 1px solid #ddd;
     }
 
     .leaderboard-table th {
-        background-color: #4CAF50;
+        background-color: #1565c0;
         color: white;
         font-weight: bold;
+        text-transform: uppercase;
+    }
+
+    .leaderboard-table tr:nth-child(odd) td {
+        background-color: #e3f2fd;
     }
 
     .leaderboard-table tr:nth-child(even) td {
-        background-color: #f9f9f9;
+        background-color: #bbdefb;
     }
 
     .leaderboard-table tr:hover td {
-        background-color: #e3f2fd;
+        background-color: #ffeb3b;
         cursor: pointer;
     }
 
-    .leaderboard-table td {
-        background-color: #fafafa;
+    /* Highlight top user (first row) with Gold Background */
+    .leaderboard-table tr:first-child td {
+        background-color: #ffcc00 !important;
+        font-weight: bold;
+        font-size: 20px;
+        color: #333;
     }
 
-    /* Adding Hover Effect for Leaderboard Rows */
-    .leaderboard-table td:hover {
-        background-color: #e3f2fd;
+    /* Add Trophy Emoji for First Place */
+    .leaderboard-table tr:first-child td:first-child::before {
+        content: "🏆 ";
     }
     
     </style>
 """, unsafe_allow_html=True)
+
 
 
 
@@ -260,59 +274,55 @@ def Kafka_topic_to_DuckDB():
     consumer_leaderboard = create_consumer(TOPIC_LEADERBOARD, 'live_analytics')
     consumer_query_counter = create_consumer(TOPIC_QUERY_METRICS, 'live_analytics')
     consumer_compile = create_consumer(TOPIC_COMPILE_METRICS, 'live_analytics')
-    #consumer_stress = create_consumer(TOPIC_STRESS_INDEX, 'live_analytics')
+    
     initialize_duckdb()
-
     con = duckdb.connect(DUCKDB_FILE)
 
-    print(f"Listening for messages on topic '{TOPIC_RAW_DATA}'...")
-    figure_keys = ["fig1", "fig2", "fig3", "fig4", "fig5", "fig6"]
-    for key in figure_keys:
-        if key not in st.session_state:
-            st.session_state[key] = go.Figure()
+    print(f"Listening for messages on Kafka...")
 
+    # Initialize empty placeholders for dynamic updates
     fig1_placeholder = st.empty()
     fig2_placeholder = st.empty()
     fig3_placeholder = st.empty()
     fig4_placeholder = st.empty()
     fig5_placeholder = st.empty()
-    fig6_placeholder = st.empty()
 
-    try:
-        while True:
-            # load new data from Kafka
-            ddb.parquet_to_table(consumer_query_counter, 'LIVE_QUERY_METRICS', con, QUERY_COLUMNS, TOPIC_QUERY_METRICS)
-            ddb.parquet_to_table(consumer_leaderboard, 'LIVE_LEADERBOARD', con, LEADERBOARD_COLUMNS, TOPIC_LEADERBOARD)
-            ddb.parquet_to_table(consumer_compile, 'LIVE_COMPILE_METRICS', con, COMPILE_COLUMNS, TOPIC_COMPILE_METRICS)
-            # use session state to prevent flashin dashboard
-            st.session_state.fig1 = build_leaderboard_compiletime(con)
-            st.session_state.fig2 = build_leaderboard_user_queries(con)
-            st.session_state.fig3 = build_live_query_counts(con)
-            st.session_state.fig4 = build_live_query_distribution(con)
-            st.session_state.fig5 = build_live_compile_metrics(con)
-            #st.session_state.fig6 = build_live_spilled_scanned(con)
+    # Auto-refresh Streamlit UI every 5 seconds
+    st_autorefresh(interval=5000, key="data_refresh")
 
-            #Display metrices dynamically 
-            display_metrics(con)
+    while True:
+        # Load new data from Kafka
+        ddb.parquet_to_table(consumer_query_counter, 'LIVE_QUERY_METRICS', con, QUERY_COLUMNS, TOPIC_QUERY_METRICS)
+        ddb.parquet_to_table(consumer_leaderboard, 'LIVE_LEADERBOARD', con, LEADERBOARD_COLUMNS, TOPIC_LEADERBOARD)
+        ddb.parquet_to_table(consumer_compile, 'LIVE_COMPILE_METRICS', con, COMPILE_COLUMNS, TOPIC_COMPILE_METRICS)
 
-            # Render figures in containers
-            uniq_id = str(int(time.time()))
-            with st.container():
-                col1, col2, col3 = st.columns(3)
+        # Update session state figures
+        st.session_state.fig1 = build_leaderboard_compiletime(con)
+        st.session_state.fig2 = build_leaderboard_user_queries(con)
+        st.session_state.fig3 = build_live_query_counts(con)
+        st.session_state.fig4 = build_live_query_distribution(con)
+        st.session_state.fig5 = build_live_compile_metrics(con)
 
-                with col1:
-                    fig1_placeholder.plotly_chart(st.session_state.fig1, use_container_width=True,key=f"fig1_chart_{uniq_id}")
-                    fig2_placeholder.plotly_chart(st.session_state.fig2, use_container_width=True,key=f"fig2_chart_{uniq_id}")
+        # Display metrics dynamically
+        display_metrics(con)
 
-                with col2:
-                    fig3_placeholder.plotly_chart(st.session_state.fig3, use_container_width=True,key=f"fig3_chart_{uniq_id}")
-                    fig4_placeholder.plotly_chart(st.session_state.fig4, use_container_width=True,key=f"fig4_chart_{uniq_id}")
+        # Render figures in columns
+        with st.container():
+            col1, col2 = st.columns(2)
 
-                with col3:
-                    fig5_placeholder.plotly_chart(st.session_state.fig5, use_container_width=True,key=f"fig5_chart_{uniq_id}")
-                    #fig6_placeholder.plotly_chart(st.session_state.fig6, use_container_width=True,key=f"fig6_chart_{uniq_id}")
-            # Wait before fetching new updates
-            time.sleep(5)
+            with col1:
+                fig1_placeholder.plotly_chart(st.session_state.fig1, use_container_width=True)
+                fig2_placeholder.plotly_chart(st.session_state.fig2, use_container_width=True)
+
+            with col2:
+                fig3_placeholder.plotly_chart(st.session_state.fig3, use_container_width=True)
+                fig4_placeholder.plotly_chart(st.session_state.fig4, use_container_width=True)
+
+        fig5_placeholder.plotly_chart(st.session_state.fig5, use_container_width=True)
+
+        # Pause before next update
+        time.sleep(5)
+
 
     except KeyboardInterrupt:
         print("\nStopping consumer...")
@@ -321,7 +331,7 @@ def Kafka_topic_to_DuckDB():
         consumer_leaderboard.close()
         consumer_query_counter.close()
         consumer_compile.close()
-        #consumer_stress.close()
+        
 
 
 ########### DuckDB to Dashboard ################
@@ -599,48 +609,6 @@ def build_live_compile_metrics(con):
     #fig.show()
     return fig
 
-'''
-def build_live_spilled_scanned(con):
-    '''''''
-    PREREQUISITES: parquet_to_table(consumer,'LIVE_QUERY_METRICS', 
-    con,QUERY_COLUMNS,TOPIC_QUERY_METRICS) has already been called
-    
-    returns dataframe containing sum of spilled and scanned data
-    ''''''
-    df = con.execute(f"""
-    SELECT 
-    SUM(mbytes_spilled) AS mb_spilled,
-    SUM(mbytes_scanned) AS mb_scanned
-    FROM LIVE_COMPILE_METRICS;
-    """).df()
-
-    # Visualization: Dual-Axis Bar Chart using Plotly
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        x=['Spilled vs Scanned'],
-        y=[df['mb_spilled'][0]],
-        name='Spilled (MB)',
-        marker=dict(color='red')
-    ))
-
-    fig.add_trace(go.Bar(
-        x=['Spilled vs Scanned'],
-        y=[df['mb_scanned'][0]],
-        name='Scanned (MB)',
-        marker=dict(color='blue')
-    ))
-
-    fig.update_layout(
-        title='Data Spilled vs Data Scanned',
-        barmode='group',
-       # xaxis_title='Metrics',
-      #  yaxis_title='MB',
-     #   template='plotly_dark'
-    #)
-    #fig.show()
-   # return fig
-'''
 if view_mode == "Historical View":
     Kafka_topic_to_DuckDB()
 
