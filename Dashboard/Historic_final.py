@@ -27,11 +27,24 @@ df.columns = df.columns.str.strip()
 st.sidebar.header("Menu")
 
 # 1. Historical View / Live View Toggle
-view_mode = st.sidebar.radio("Select View", ("Historical View", "Live View"))
+view_mode = st.sidebar.radio("Select View", ("Instance View", "Aggregate View"))
 
 # 2. File Size Display
 file_size = os.path.getsize(DUCKDB_FILE)
 st.sidebar.write(f"File Size: {numerize.numerize(file_size)}")
+
+# 3. Instance ID Input
+instance_id = st.sidebar.number_input(
+    "Enter Instance ID",  # Label for the input
+    min_value=1,          # Minimum value allowed
+    max_value=200,        # Maximum value allowed
+    value=1,              # Default value
+    step=1                # Step size for increment/decrement
+)
+
+# Display selected instance ID in the main app (optional)
+st.write(f"Selected Instance ID: {instance_id}")
+
 
 # Add fade-in animation for the whole dashboard
 st.markdown("""
@@ -175,7 +188,7 @@ def real_time_graph_in_historical_view():
         'group.id': 'stress-index-consumer',
         'auto.offset.reset': 'earliest'
     }
-    consumer = Consumer(conf)
+    #consumer = Consumer(conf)
     consumer.subscribe(['TOPIC_FLAT_TABLES'])  
 
     long_avg = 0.0  # Initial value for long-term average
@@ -254,10 +267,10 @@ def visualize_stress_index(short_avg, long_avg, bytes_spilled):
 
 
 ##################OTHER ANALYTICAL QUERIES############################
-def historical_view_graphs():
+
 
 def historical_view_graphs():
-    # SQL Query for Analytical vs Transform Count
+    
     average_times_ingestion_analytics = """
         WITH analytical_tables AS (
         SELECT  -- get the tables that are identified as tables for analytical workflow
@@ -346,10 +359,11 @@ def historical_view_graphs():
 
 
 # Show content based on the selected view mode
-if view_mode == "Historical View":
-    display_metrics()  # Show the basic metrics
-    historical_view_graphs()  # Show the historical view graphs
-    real_time_graph_in_historical_view() #function calls the stress index
+if view_mode == "Instance View":
+    display_metrics()  
+    real_time_graph_in_historical_view()
+    historical_view_graphs()  
+    
 
 # Footer: Add a custom footer
 st.markdown("""
