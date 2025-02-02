@@ -272,46 +272,6 @@ def Kafka_topic_to_DuckDB():
             st.session_state.fig2.update_layout(width=400)
             st.session_state.fig5.update_layout(width=400)
             uniq_id = str(int(time.time()))
-            with st.container():
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    fig1_placeholder.plotly_chart(
-                        st.session_state.fig1,
-                        use_container_width=False,
-                        config={"responsive": False},
-                        key=f"fig1_chart_{uniq_id}"
-                    )
-
-                with col2:
-                    fig4_placeholder.plotly_chart(
-                        st.session_state.fig4,
-                        use_container_width=False,
-                        config={"responsive": False},
-                        key=f"fig4_chart_{uniq_id}"
-                    )
-
-            # -- Second row: fig2 (bar chart) and fig5 (compile metrics) side by side
-            with st.container():
-                col3, col4 = st.columns(2)
-
-                with col3:
-                    fig2_placeholder.plotly_chart(
-                        st.session_state.fig2,
-                        use_container_width=False,
-                        config={"responsive": False},
-                        key=f"fig2_chart_{uniq_id}"
-                    )
-
-                with col4:
-                    fig5_placeholder.plotly_chart(
-                        st.session_state.fig5,
-                        use_container_width=False,
-                        config={"responsive": False},
-                        key=f"fig5_chart_{uniq_id}"
-                    )            # Wait before fetching new updates
-            time.sleep(1)
-
                 # First Row: Compile Time Leaderboard (Left) & Query Distribution (Right)
             with st.container():
                 col1, col2 = st.columns(2)  # Two columns
@@ -332,6 +292,81 @@ def Kafka_topic_to_DuckDB():
                 with col4:  # Right Column
                     st.plotly_chart(st.session_state.fig5, config={"responsive": True}, use_container_width=True)
 
+# Create placeholders for graphs and metrics *once* outside the loop:
+fig1_placeholder = st.empty()  # For leaderboard compile time
+fig2_placeholder = st.empty()  # For leaderboard user queries
+fig4_placeholder = st.empty()  # For live query distribution
+fig5_placeholder = st.empty()  # For live compile metrics
+metrics_placeholder = st.empty()  # For dynamic metrics
+
+# (Optionally, if you want to arrange the graphs in a fixed layout, create a container:)
+graph_container = st.container()  
+
+try:
+    while True:
+        # Load new data from Kafka and update DuckDB tables
+        parquet_to_table(consumer_query_counter, 'LIVE_QUERY_METRICS', con, QUERY_COLUMNS, TOPIC_QUERY_METRICS)
+        parquet_to_table(consumer_leaderboard, 'LIVE_LEADERBOARD', con, LEADERBOARD_COLUMNS, TOPIC_LEADERBOARD)
+        parquet_to_table(consumer_compile, 'LIVE_COMPILE_METRICS', con, COMPILE_COLUMNS, TOPIC_COMPILE_METRICS)
+        
+        # Update session state figures (these functions should return updated figures)
+        st.session_state.fig1 = build_leaderboard_compiletime(con)
+        st.session_state.fig2 = build_leaderboard_user_queries(con)
+        st.session_state.fig4 = build_live_query_distribution(con)
+        st.session_state.fig5 = build_live_compile_metrics(con)
+
+        # Update metrics display (this function uses the provided placeholder)
+        display_metrics(con, metrics_placeholder)
+
+        # Update layout (if needed)
+        st.session_state.fig1.update_layout(width=400)
+        st.session_state.fig4.update_layout(width=400)
+        st.session_state.fig2.update_layout(width=400)
+        st.session_state.fig5.update_layout(width=400)
+
+        # Now update the pre-created graph placeholders.
+        # Use a fixed layout so that the graphs update in place instead of stacking.
+        with graph_container.container():
+            col1, col2 = st.columns(2)
+            with col1:
+                fig1_placeholder.plotly_chart(
+                    st.session_state.fig1, 
+                    config={"responsive": True}, 
+                    use_container_width=True
+                )
+            with col2:
+                fig4_placeholder.plotly_chart(
+                    st.session_state.fig4, 
+                    config={"responsive": True}, 
+                    use_container_width=True
+                )
+            # Second row of graphs:
+            col3, col4 = st.columns(2)
+            with col3:
+                fig2_placeholder.plotly_chart(
+                    st.session_state.fig2, 
+                    config={"responsive": True}, 
+                    use_container_width=True
+                )
+            with col4:
+                fig5_placeholder.plotly_chart(
+                    st.session_state.fig5, 
+                    config={"responsive": True}, 
+                    use_container_width=True
+                )
+        
+        # Wait before the next update
+        time.sleep(5)
+
+except KeyboardInterrupt:
+    print("\nStopping consumer...")
+
+finally:
+    consumer_raw_data.close()
+    consumer_leaderboard.close()
+    consumer_query_counter.close()
+    consumer_compile.close()
+    # consumer_stress.close()  # if used
 
     except KeyboardInterrupt:
         print("\nStopping consumer...")
