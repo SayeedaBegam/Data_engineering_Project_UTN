@@ -223,6 +223,7 @@ def create_consumer(topic, group_id):
     return consumer
 
 
+
 def Kafka_topic_to_DuckDB():
     consumer_raw_data = create_consumer(TOPIC_RAW_DATA, 'raw_data')
     consumer_leaderboard = create_consumer(TOPIC_LEADERBOARD, 'live_analytics')
@@ -248,77 +249,88 @@ def Kafka_topic_to_DuckDB():
     fig5_placeholder = st.empty()
     fig6_placeholder = st.empty()
 
-
     # Initialize Kafka consumers and other variables
     history = pd.DataFrame(columns=["timestamp", "short_avg", "long_avg", "bytes_spilled"])
     long_avg, short_avg, mb_spilled = 0, 0, 0  # Initialize avg variables
-    try: 
+    start_time = time.time()  # Track when the processing starts
+    
+    # List of tables to initialize
+    tables_to_initialize = ['LIVE_QUERY_METRICS', 'LIVE_LEADERBOARD', 'LIVE_COMPILE_METRICS']
+
+    try:
         while True:
-                # Load new data from Kafka
-                parquet_to_table(consumer_query_counter, 'LIVE_QUERY_METRICS', con, QUERY_COLUMNS, TOPIC_QUERY_METRICS)
-                parquet_to_table(consumer_leaderboard, 'LIVE_LEADERBOARD', con, LEADERBOARD_COLUMNS, TOPIC_LEADERBOARD)
-                parquet_to_table(consumer_compile, 'LIVE_COMPILE_METRICS', con, COMPILE_COLUMNS, TOPIC_COMPILE_METRICS)
+            # Check if n seconds have passed and initialize all tables if true
+            if time.time() - start_time > 60:  # Initialize after n seconds
+                for table in tables_to_initialize:
+                    con.execute(f"TRUNCATE TABLE {table}")  # Truncate each table to reset its data
+                print("All tables initialized!")
+                start_time = time.time()  # Reset the timer
 
-                # Use session state to prevent flashing dashboard
-                st.session_state.fig1 = build_leaderboard_compiletime(con)
-                st.session_state.fig2 = build_leaderboard_user_queries(con)
-                st.session_state.fig4 = build_live_query_distribution(con)
-                st.session_state.fig5 = build_live_compile_metrics(con)
+            # Load new data from Kafka
+            parquet_to_table(consumer_query_counter, 'LIVE_QUERY_METRICS', con, QUERY_COLUMNS, TOPIC_QUERY_METRICS)
+            parquet_to_table(consumer_leaderboard, 'LIVE_LEADERBOARD', con, LEADERBOARD_COLUMNS, TOPIC_LEADERBOARD)
+            parquet_to_table(consumer_compile, 'LIVE_COMPILE_METRICS', con, COMPILE_COLUMNS, TOPIC_COMPILE_METRICS)
 
-                # Display metrics dynamically 
-                display_metrics(con, metrics_placeholder)
+            # Use session state to prevent flashing dashboard
+            st.session_state.fig1 = build_leaderboard_compiletime(con)
+            st.session_state.fig2 = build_leaderboard_user_queries(con)
+            st.session_state.fig4 = build_live_query_distribution(con)
+            st.session_state.fig5 = build_live_compile_metrics(con)
 
-                # Render figures in containers
-                st.session_state.fig1.update_layout(width=400)
-                st.session_state.fig4.update_layout(width=400)
-                st.session_state.fig2.update_layout(width=400)
-                st.session_state.fig5.update_layout(width=400)
-                uniq_id = str(int(time.time()))
+            # Display metrics dynamically 
+            display_metrics(con, metrics_placeholder)
 
-                # First Row: Compile Time Leaderboard (Left) & Query Distribution (Right)
-                with st.container():
-                    col1, col2 = st.columns(2)  # Two columns
-                    with col1:  # Left Column
-                        fig1_placeholder.plotly_chart(st.session_state.fig1, config={"responsive": True}, use_container_width=True, key=f"fig1_chart_{uniq_id}")
-                    with col2:  # Right Column
-                        fig4_placeholder.plotly_chart(st.session_state.fig4, config={"responsive": True}, use_container_width=True, key=f"fig4_chart_{uniq_id}")
-                
-                # Second Row: User Queries (Left) & Compile Metrics (Right)
-                with st.container():
-                    col3, col4 = st.columns(2)
-                    with col3:  # Left Column
-                        fig2_placeholder.plotly_chart(st.session_state.fig2, config={"responsive": True}, use_container_width=True, key=f"fig2_chart_{uniq_id}")
-                    with col4:  # Right Column
-                        fig5_placeholder.plotly_chart(st.session_state.fig5, config={"responsive": True}, use_container_width=True, key=f"fig5_chart_{uniq_id}")
+            # Render figures in containers
+            st.session_state.fig1.update_layout(width=400)
+            st.session_state.fig4.update_layout(width=400)
+            st.session_state.fig2.update_layout(width=400)
+            st.session_state.fig5.update_layout(width=400)
+            uniq_id = str(int(time.time()))
 
-                # Real-time Stress Data Update
-                time_index = len(history)  # Use index as time tracker
-                short_avg, long_avg, mb_spilled = calculate_stress(consumer_stress, long_avg, short_avg, time_index)
+            # First Row: Compile Time Leaderboard (Left) & Query Distribution (Right)
+            with st.container():
+                col1, col2 = st.columns(2)  # Two columns
+                with col1:  # Left Column
+                    fig1_placeholder.plotly_chart(st.session_state.fig1, config={"responsive": True}, use_container_width=True, key=f"fig1_chart_{uniq_id}")
+                with col2:  # Right Column
+                    fig4_placeholder.plotly_chart(st.session_state.fig4, config={"responsive": True}, use_container_width=True, key=f"fig4_chart_{uniq_id}")
 
-                # Append to history (keep last 100 points)
-                new_row = pd.DataFrame([{
-                    "timestamp": pd.Timestamp.now(),
-                    "short_avg": short_avg,
-                    "long_avg": long_avg,
-                    "bytes_spilled": mb_spilled
-                }])
-                history = pd.concat([history, new_row]).tail(100)
+            # Second Row: User Queries (Left) & Compile Metrics (Right)
+            with st.container():
+                col3, col4 = st.columns(2)
+                with col3:  # Left Column
+                    fig2_placeholder.plotly_chart(st.session_state.fig2, config={"responsive": True}, use_container_width=True, key=f"fig2_chart_{uniq_id}")
+                with col4:  # Right Column
+                    fig5_placeholder.plotly_chart(st.session_state.fig5, config={"responsive": True}, use_container_width=True, key=f"fig5_chart_{uniq_id}")
 
-                # Real-time visualization for stress data
-                fig_stress = go.Figure()
-                fig_stress.add_trace(go.Scatter(x=history["timestamp"], y=history["short_avg"], mode='lines', name='Short-term Avg', line=dict(color='blue')))
-                fig_stress.add_trace(go.Scatter(x=history["timestamp"], y=history["long_avg"], mode='lines', name='Long-term Avg', line=dict(color='red')))
-                fig_stress.add_trace(go.Bar(x=history["timestamp"], y=history["bytes_spilled"], name="Bytes Spilled", marker=dict(color="green", opacity=0.6)))
+            # Real-time Stress Data Update
+            time_index = len(history)  # Use index as time tracker
+            short_avg, long_avg, mb_spilled = calculate_stress(consumer_stress, long_avg, short_avg, time_index)
 
-                fig_stress.update_layout(title="Real-Time Query Performance",
-                                        xaxis_title="Time",
-                                        yaxis_title="Performance Metrics",
-                                        template="plotly_dark")
+            # Append to history (keep last 100 points)
+            new_row = pd.DataFrame([{
+                "timestamp": pd.Timestamp.now(),
+                "short_avg": short_avg,
+                "long_avg": long_avg,
+                "bytes_spilled": mb_spilled
+            }])
+            history = pd.concat([history, new_row]).tail(100)
 
-                # Display real-time performance chart
-                graph_placeholder.plotly_chart(fig_stress, use_container_width=True)
+            # Real-time visualization for stress data
+            fig_stress = go.Figure()
+            fig_stress.add_trace(go.Scatter(x=history["timestamp"], y=history["short_avg"], mode='lines', name='Short-term Avg', line=dict(color='blue')))
+            fig_stress.add_trace(go.Scatter(x=history["timestamp"], y=history["long_avg"], mode='lines', name='Long-term Avg', line=dict(color='red')))
+            fig_stress.add_trace(go.Bar(x=history["timestamp"], y=history["bytes_spilled"], name="Bytes Spilled", marker=dict(color="green", opacity=0.6)))
 
-                time.sleep(2)
+            fig_stress.update_layout(title="Real-Time Query Performance",
+                                    xaxis_title="Time",
+                                    yaxis_title="Performance Metrics",
+                                    template="plotly_dark")
+
+            # Display real-time performance chart
+            graph_placeholder.plotly_chart(fig_stress, use_container_width=True)
+
+            time.sleep(2)
 
     except KeyboardInterrupt:
         print("\nStopping consumer...")
