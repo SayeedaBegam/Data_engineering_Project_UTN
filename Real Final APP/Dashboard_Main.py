@@ -3,13 +3,13 @@ import streamlit as st
 st.set_page_config(page_title="Redset Dashboard", page_icon="📀", layout="wide")
 
 import Dashboard_Live_Final as live
-# import Dashboard_Historical_Final as historical
+import Dashboard_Historical_Final as historical
 
 st.header("Redset Dashboard")
 
 # Sidebar configuration
 st.sidebar.header("Menu")
-view_mode = st.sidebar.radio("Select View", ("Instance View", "Aggregate View"))
+view_mode = st.sidebar.radio("Select View", ("Expert View", "Aggregate View"))
 
 
 # Add custom styling (CSS) for Query Counter and Leaderboard
@@ -142,12 +142,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-if view_mode == "Instance View":
+if view_mode == "Expert View":
     live.Kafka_topic_to_DuckDB()
 elif view_mode == "Aggregate View":
-    # historical. # need to change to histcal version
-    live.Kafka_topic_to_DuckDB()
-    print("Add Historical version!!")
+    historical.update_tables_periodically()
 
 
 # Footer: 
