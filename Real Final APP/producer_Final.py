@@ -1,7 +1,6 @@
 import pandas as pd
 from confluent_kafka import Producer
 import json
-# import pyarrow.parquet as pq
 import time
 
 
