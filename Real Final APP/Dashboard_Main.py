@@ -9,7 +9,7 @@ st.header("Redset Dashboard")
 
 # Sidebar configuration
 st.sidebar.header("Menu")
-view_mode = st.sidebar.radio("Select View", ("Expert View", "Aggregate View"))
+view_mode = st.sidebar.radio("Select View", ("Aggregate View", "Expert View"))
 
 
 # Add custom styling (CSS) for Query Counter and Leaderboard
@@ -142,9 +142,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-if view_mode == "Expert View":
+if view_mode == "Aggregate View":
     live.Kafka_topic_to_DuckDB()
-elif view_mode == "Aggregate View":
+elif view_mode == "Expert View":
     historical.update_tables_periodically()
 
 
