@@ -71,7 +71,6 @@ def initialize_duckdb():
     con.close()
 
 
-
 def create_consumer(topic, group_id):
     """Create a Confluent Kafka Consumer for a specific topic and group."""
     
@@ -120,11 +119,11 @@ def Kafka_topic_to_DuckDB():
     
     # Initialize variables for real-time tracking of metrics
     history = pd.DataFrame(columns=["timestamp", "short_avg", "long_avg", "bytes_spilled"])
-    long_avg, short_avg, mb_spilled = 0, 0, 0  # Initialize avg variables
+    long_avg, short_avg, mb_spilled = 30, 30, 0  # Initialize avg variables
     start_time = time.time()  # Track processing time
 
     # List of DuckDB tables to reset every 60 seconds
-    tables_to_initialize = ['LIVE_QUERY_METRICS', 'LIVE_LEADERBOARD', 'LIVE_COMPILE_METRICS']
+    tables_to_initialize = ['LIVE_QUERY_METRICS', 'LIVE_COMPILE_METRICS']
 
     try:
         while True:
@@ -338,8 +337,8 @@ def build_leaderboard_compiletime(con):
     
     # Query the LIVE_LEADERBOARD table to fetch top 10 longest compile durations
     df1 = con.execute(f"""
-    SELECT 
-    instance_id, 
+    SELECT DISTINCT
+    query_id, 
     compile_duration_ms as compile_duration
     FROM LIVE_LEADERBOARD
     ORDER BY compile_duration_ms DESC
@@ -366,7 +365,7 @@ def build_leaderboard_compiletime(con):
                     align="center"),  # Header alignment
         cells=dict(values=[
             df1["Rank"].tolist(),  # List of rank values
-            df1["instance_id"].tolist(),  # List of instance IDs
+            df1["query_id"].tolist(),  # List of instance IDs
             df1["formatted_compile_time"].tolist()  # List of formatted compile times
         ],
                    fill_color="black",  # Cells background color
@@ -594,11 +593,11 @@ def calculate_stress(consumer, long_avg, short_avg, time_index=0):
     """
 
     # Long-term and short-term averaging factors
-    long_alpha = 0.0002  # Weight for long-term average (smooths over longer periods)
+    long_alpha = 0.005  # Weight for long-term average (smooths over longer periods)
     short_alpha = 0.02   # Weight for short-term average (reacts quicker to recent changes)
 
     # Poll Kafka for the latest message
-    msg = consumer.poll(timeout=1.0)  # Timeout after 1 second if no new messages
+    msg = consumer.poll(timeout=.5)  # Timeout after 1 second if no new messages
     if msg is None or msg.value() is None:
         return short_avg, long_avg, 0  # No update if no new message
 
@@ -625,8 +624,6 @@ def calculate_stress(consumer, long_avg, short_avg, time_index=0):
         return short_avg, long_avg, 0  # Return no update if the message is not valid JSON
 
 
-
-
 def parquet_to_table(consumer, table, conn, columns, topic):
     """
     Reads messages from a Kafka consumer, extracts data from JSON, writes to Parquet,
@@ -644,7 +641,7 @@ def parquet_to_table(consumer, table, conn, columns, topic):
 
     while True:
         # Poll for a message from Kafka with a 1-second timeout
-        msg = consumer.poll(timeout=1.0)
+        msg = consumer.poll(timeout=.5)
         if msg is None:
             break  # Exit if no more messages are available
         
