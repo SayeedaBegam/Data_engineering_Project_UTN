@@ -1,7 +1,7 @@
 import pandas as pd
 from confluent_kafka import Producer
 import json
-import pyarrow.parquet as pq
+# import pyarrow.parquet as pq
 import time
 
 
@@ -16,7 +16,6 @@ DUCKDB_FILE = "cleaned_data.duckdb"  # Path to DuckDB file where cleaned data wi
 # Kafka configuration
 KAFKA_BROKER = 'localhost:9092'  # Address of the Kafka broker to connect to
 TOPIC_RAW_DATA = 'parquet_stream'  # Kafka topic for streaming raw data
-TOPIC_CLEAN_DATA = 'clean_data'  # Kafka topic for cleaned data after processing
 TOPIC_QUERY_METRICS = 'query_metrics'  # Kafka topic for query metrics (sorted durations)
 TOPIC_COMPILE_METRICS = 'compile_metrics'  # Kafka topic for compilation metrics (sorted durations)
 TOPIC_LEADERBOARD = 'leaderboard'  # Kafka topic for leaderboard updates
@@ -141,7 +140,7 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
         print("Finished streaming data to Kafka.")
         
         # Add delay based on time differences between batches for real-time simulation
-        if batch_id < df['batch_id'].max():
+        # if batch_id < df['batch_id'].max():
             # Uncomment below to use delay based on the time difference between batches
             #delay_stream(curr_batch_end, next_batch_start)
 
@@ -152,193 +151,141 @@ def stream_parquet_to_kafka(parquet_file, batch_size):
 
 
 def delay_stream(batch_start, next_batch_start):
-    scaling_factor = 6480   # Scaling factor to compress 3 months of data in 20 mins
+    """
+    Simulate real-time streaming by introducing a delay based on the time difference 
+    between the start of the current and next batch.
+
+    The delay is scaled using a factor to compress the time between batches, simulating 
+    a real-time stream for testing or processing purposes.
+
+    Args:
+        batch_start (pd.Timestamp): The timestamp indicating the start of the current batch.
+        next_batch_start (pd.Timestamp): The timestamp indicating the start of the next batch.
+
+    Returns:
+        None: The function introduces a delay but does not return any value.
+    """
+    # Scaling factor to compress 3 months of data into 20 minutes of real-time simulation
+    scaling_factor = 6480  # Example scaling factor for time compression (can be adjusted as needed)
+    
+    # Calculate the time difference between the current batch and the next batch in seconds
     time_diff = (next_batch_start - batch_start).total_seconds()
+    
+    # Calculate the delay by dividing the time difference by the scaling factor
     delay = time_diff / scaling_factor
+    
+    # Set a minimum delay of 1 second to avoid excessive delays for small time differences
     min_delay = 1
+    
+    # Sleep for the calculated delay, ensuring that it is at least the minimum delay
     time.sleep(max(delay, min_delay))
+
 
 def type_cast_batch(batch):
     """
-    Type casts a Pandas DataFrame according to the predefined schema.
-    
-    :param batch: Pandas DataFrame containing the required columns.
-    :return: Type-casted DataFrame
+    Type casts the columns of a Pandas DataFrame according to a predefined schema.
+
+    This function ensures that each column in the DataFrame is converted to the correct data type
+    as specified in the dtype_mapping. If any invalid timestamps are encountered during conversion,
+    they will be coerced to `NaT` (Not a Time).
+
+    Args:
+        batch (pandas.DataFrame): The input DataFrame containing columns that need to be type-cast.
+
+    Returns:
+        pandas.DataFrame: The type-cast DataFrame with the columns converted to the specified data types.
     """
-    # Define the expected data types
+    # Define a dictionary that maps column names to their expected data types
     dtype_mapping = {
-        "instance_id": "Int64",
-        "cluster_size": "float64",
-        "user_id": "Int64",
-        "database_id": "Int64",
-        "query_id": "Int64",
-        "arrival_timestamp": "datetime64[ns]",
-        "compile_duration_ms": "float64",
-        "queue_duration_ms": "Int64",
-        "execution_duration_ms": "Int64",
-        "feature_fingerprint": "string",
-        "was_aborted": "boolean",
-        "was_cached": "boolean",
-        "cache_source_query_id": "float64",
-        "query_type": "string",
-        "num_permanent_tables_accessed": "float64",
-        "num_external_tables_accessed": "float64",
-        "num_system_tables_accessed": "float64",
-        "read_table_ids": "string",
-        "write_table_ids": "string",
-        "mbytes_scanned": "float64",
-        "mbytes_spilled": "float64",
-        "num_joins": "Int64",
-        "num_scans": "Int64",
-        "num_aggregations": "Int64",
-        "batch_id": "Int64",
+        "instance_id": "Int64",  # Integer type for instance_id
+        "cluster_size": "float64",  # Float type for cluster_size
+        "user_id": "Int64",  # Integer type for user_id
+        "database_id": "Int64",  # Integer type for database_id
+        "query_id": "Int64",  # Integer type for query_id
+        "arrival_timestamp": "datetime64[ns]",  # DateTime type for arrival_timestamp
+        "compile_duration_ms": "float64",  # Float type for compile_duration_ms
+        "queue_duration_ms": "Int64",  # Integer type for queue_duration_ms
+        "execution_duration_ms": "Int64",  # Integer type for execution_duration_ms
+        "feature_fingerprint": "string",  # String type for feature_fingerprint
+        "was_aborted": "boolean",  # Boolean type for was_aborted
+        "was_cached": "boolean",  # Boolean type for was_cached
+        "cache_source_query_id": "float64",  # Float type for cache_source_query_id
+        "query_type": "string",  # String type for query_type
+        "num_permanent_tables_accessed": "float64",  # Float type for num_permanent_tables_accessed
+        "num_external_tables_accessed": "float64",  # Float type for num_external_tables_accessed
+        "num_system_tables_accessed": "float64",  # Float type for num_system_tables_accessed
+        "read_table_ids": "string",  # String type for read_table_ids
+        "write_table_ids": "string",  # String type for write_table_ids
+        "mbytes_scanned": "float64",  # Float type for mbytes_scanned
+        "mbytes_spilled": "float64",  # Float type for mbytes_spilled
+        "num_joins": "Int64",  # Integer type for num_joins
+        "num_scans": "Int64",  # Integer type for num_scans
+        "num_aggregations": "Int64",  # Integer type for num_aggregations
+        "batch_id": "Int64",  # Integer type for batch_id
     }
 
-    # Convert data types
+    # Loop through each column and cast it to the appropriate type
     for column, dtype in dtype_mapping.items():
         if dtype == "datetime64[ns]":
-            batch[column] = pd.to_datetime(batch[column], errors='coerce')  # Handle invalid timestamps
+            # If the dtype is datetime, convert the column to datetime type, handle errors by coercing to NaT
+            batch[column] = pd.to_datetime(batch[column], errors='coerce')
         else:
+            # Cast the column to the specified data type
             batch[column] = batch[column].astype(dtype)
 
-def clean_data(batch,producer):
-    """
-    Cleans a single batch and writes to clean_data topic.
-    """
-    try:
-        # Convert "NULL" strings and None to actual NaN values
-        batch.replace(["NULL", None], pd.NA, inplace=True)
 
-        # Ensure numeric fields default to 0
-        numeric_columns = [
-            "instance_id", "cluster_size", "user_id", "database_id", "query_id",
-            "compile_duration_ms", "queue_duration_ms", "execution_duration_ms",
-            "num_permanent_tables_accessed", "num_external_tables_accessed",
-            "num_system_tables_accessed", "mbytes_scanned", "mbytes_spilled",
-            "num_joins", "num_scans", "num_aggregations"
-        ]
-
-        for col in numeric_columns:
-            if col in df.columns:
-                batch[col] = pd.to_numeric(batch[col], errors='coerce').fillna(0).astype(int)  
-
-        # Fix text fields
-        text_columns = ["feature_fingerprint", "cache_source_query_id", "query_type"]
-        for col in text_columns:
-            if col in df.columns:
-                batch[col] = batch[col].fillna("UNKNOWN")  # Fix missing text fields
-
-        # Fix read_table_ids and write_table_ids
-        batch["read_table_ids"] = batch.get("read_table_ids", pd.NA).astype(str).fillna("[]")
-        batch["write_table_ids"] = batch.get("write_table_ids", pd.NA).astype(str).fillna("[]")
-
-        # Fix boolean fields
-        boolean_columns = ["was_aborted", "was_cached"]
-        for col in boolean_columns:
-            if col in batch.columns:
-                batch[col] = batch[col].fillna(False).astype(bool)
-        producer.produce(TOPIC_CLEAN_DATA, key=None, value=json.dumps(record))
-    except Exception as e:
-        print(f"❌ Error processing message: {e}")
 
 def write_to_topic(batch, topic, producer, list_columns):
+    """
+    Write a batch of data to a specified Kafka topic.
+
+    This function selects relevant columns from the provided DataFrame, converts any datetime columns
+    to ISO 8601 format, serializes the data to JSON, and sends each record to the specified Kafka topic.
+
+    Args:
+        batch (pandas.DataFrame): The input DataFrame containing data to be written to Kafka.
+        topic (str): The Kafka topic to which the data should be written.
+        producer (KafkaProducer): The Kafka producer instance used to send data.
+        list_columns (list): A list of column names that should be included in the Kafka messages.
+
+    Returns:
+        None: This function does not return any value; it sends data to Kafka.
+    """
     try:
+        # Ensure the input batch is a pandas DataFrame
         if not isinstance(batch, pd.DataFrame):
             raise ValueError("Expected 'batch' to be a pandas DataFrame.")
 
-        # Select only relevant columns
-        selected_columns = batch[list_columns].copy()  # Create a copy to avoid modifying original DataFrame
+        # Select only the relevant columns based on the provided list
+        selected_columns = batch[list_columns].copy()  # Copy to avoid modifying the original DataFrame
 
+        # If no relevant columns are found, print a warning and exit
         if selected_columns.empty:
             print(f"Warning: No relevant columns found for topic '{topic}'.")
             return
         
-        # Convert datetime columns to string (ISO 8601 format)
+        # Convert datetime columns to string format (ISO 8601)
         for col in selected_columns.select_dtypes(include=['datetime64[ns]']).columns:
             selected_columns[col] = selected_columns[col].dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Convert to a list of dictionaries (each row as a JSON object)
+        # Convert the DataFrame to a list of dictionaries (each row becomes a JSON object)
         json_payloads = selected_columns.to_dict(orient='records')
 
-        # Send each record individually
+        # Send each record as a separate message to the Kafka topic
         for record in json_payloads:
-            #print(record)
+            # Print the record for debugging (optional)
             print(record)
+            # Send the record to the Kafka topic
             producer.produce(topic, value=json.dumps(record))
             producer.flush()
 
     except Exception as e:
+        # Handle any exceptions and print an error message
         print(f"Error writing to topic '{topic}': {e}")
 
     finally:
+        # Ensure all messages are flushed before ending
         producer.flush()
-
-def parquet_to_table(consumer, table, conn, columns,topic):
-    """
-    Reads messages from a Kafka consumer, extracts data from JSON, writes to Parquet,
-    and loads into a DuckDB table.
-    
-    Args:
-        consumer: Kafka consumer instance.
-        table: DuckDB table name.
-        conn: DuckDB connection.
-    """
-    data_list = []
-    parquet_file = f"kafka_data_{table}.parquet"
-    
-    while True:
-        msg = consumer.poll(timeout=1.0)
-        if msg is None:
-            break  # Stop polling when there are no more messages
-        
-        if msg.error():
-            print(f"Kafka Error: {msg.error()}")
-            continue  # Skip errors and keep polling
-
-        # Deserialize JSON Kafka message
-        message_value = msg.value().decode('utf-8')
-
-        try:
-            # Convert JSON string to dictionary
-            records = json.loads(message_value)
-
-            if isinstance(records, dict):
-                records = [records]  # Ensure list format
-
-            data_list.extend(records)
-        
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON: {e}")
-
-    if not data_list:  # If no data was received, exit function early
-        print("No data received from Kafka.")
-        return
-
-    df = pd.DataFrame(data_list)
-    df = df[columns]
-
-    if "arrival_timestamp" in df.columns:
-        df["arrival_timestamp"] = pd.to_datetime(df["arrival_timestamp"], errors='coerce')  # Handle parsing errors
-    if topic == 'flattened':
-        df['read_table_ids'] = df['read_table_ids'].astype(str).str.split(",")
-        df = df.explode('read_table_ids', ignore_index=True)
-
-        # Handle None/NaN values before conversion
-        df['read_table_ids'] = pd.to_numeric(df['read_table_ids'], errors='coerce')
-
-        # Convert to nullable integer type (allows NaN values)
-        df['read_table_ids'] = df['read_table_ids'].astype(pd.Int64Dtype())
-
-    # Save as Parquet
-    df.to_parquet(parquet_file, index=False)
-    time.sleep(4)
-    # Get absolute path for DuckDB compatibility
-    parquet_path = os.path.abspath(parquet_file)
-
-    # Load into DuckDB
-    conn.execute(f"COPY {table} FROM '{parquet_path}' (FORMAT PARQUET)")
-    consumer.commit()  # Commit offset to ensure that only new data is written
-
 
 def main():
     parquet_file = 'sample_0.001.parquet'  # Parquet file name
