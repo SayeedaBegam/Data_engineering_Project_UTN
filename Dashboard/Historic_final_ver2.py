@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 import threading
 import matplotlib
-
+import plotly.express as px
 # Set up the page layout
 st.set_page_config(page_title="Redset Dashboard", page_icon="🌍", layout="wide")
 st.header("Redset Dashboard")
@@ -57,79 +57,64 @@ st.markdown("""
 ###############################################################################
 # FUNCTION: Build select queries histogram
 ###############################################################################
-def build_select_queries_histogram()
-query = f"""
-            # distribution of timestamps of select queries after ingestion query per table
-        result = duckdb.sql("""
-        -- CREATE TABLE 
-        WITH analytical_tables AS (
-        SELECT  -- get the tables that are identified as tables for analytical workflow
-            instance_id,
-            table_id,
-        CAST(COALESCE(select_count / (COALESCE(transform_count, 0) + COALESCE(select_count, 0)), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
-        FROM tables_workload_count
-        WHERE percentage_select_queries > 0.80
-        ), realtive_to_next_times AS (
-        SELECT DISTINCT -- keep only distinct query_id
-                   instance_id, 
-                   query_id, 
-                   read_table_id, 
-                   --last_write_table_insert, 
-                   --next_write_table_insert,
-                   EPOCH_MS(arrival_timestamp - last_write_table_insert) / EPOCH_MS(next_write_table_insert - last_write_table_insert) relative_to_next
-        FROM output_table t1
-        WHERE 1
-            AND t1.read_table_id IN ( 
-                SELECT table_id
-                FROM analytical_tables)
-            AND query_type = 'select'
-        --GROUP BY instance_id, query_id, read_table_id, last_write_table_insert
-        ), hist_bins AS (
-        SELECT
-            instance_id,
-            query_id,
-            read_table_id,
-            NTILE(10) OVER (ORDER BY relative_to_next) AS bin --divide the relative_to_next column into 10 equal bins
-        FROM realtive_to_next_times  
-        )
-        SELECT 
-            instance_id, 
-            read_table_id, 
-            bin,
-            COUNT(*) AS count
-        FROM hist_bins
-        --WHERE read_table_id = 129
-        GROUP BY ALL
-        ORDER BY ALL
-        """).df()
+@st.cache_data(ttl=10)  # Cache with TTL of 10 seconds
+def build_select_queries_histogram(selected_instance_id):
+         query = """
+            WITH analytical_tables AS (
+                SELECT instance_id, table_id,
+                       CAST(COALESCE(select_count / NULLIF(transform_count + select_count, 0), 0) AS DECIMAL(20, 2)) AS percentage_select_queries          
+                FROM tables_workload_count
+                WHERE instance_id = {selected_instance_id}
+                WHERE (select_count / NULLIF(transform_count + select_count, 0)) > 0.80
+            ), realtive_to_next_times AS (
+                SELECT DISTINCT instance_id, query_id, read_table_id, 
+                       EPOCH_MS(arrival_timestamp - last_write_table_insert) / 
+                       EPOCH_MS(next_write_table_insert - last_write_table_insert) AS relative_to_next
+                FROM output_table
+                WHERE read_table_id IN (SELECT table_id FROM analytical_tables)
+                AND query_type = 'select'
+            ), hist_bins AS (
+                SELECT instance_id, query_id, read_table_id,
+                       NTILE(10) OVER (ORDER BY relative_to_next) AS bin
+                FROM realtive_to_next_times
+            )
+            SELECT instance_id, read_table_id, bin, COUNT(*) AS count
+            FROM hist_bins
+            GROUP BY instance_id, read_table_id, bin
+            ORDER BY instance_id, read_table_id, bin;
+        """
         
-        
-        # Get unique read_table_ids
-        read_table_ids = result["read_table_id"].unique()
-        
-        # Create subplots
-        fig, axes = plt.subplots(len(read_table_ids), 1, figsize=(8, len(read_table_ids) * 4), sharex=True)
-        
-        # If there's only one read_table_id, axes is not a list
-        if len(read_table_ids) == 1:
-            axes = [axes]
-        
-        # Loop through each read_table_id and plot
-        for i, read_table_id in enumerate(read_table_ids):
-            query = f"SELECT bin, count FROM result WHERE read_table_id = {read_table_id} ORDER BY bin"
-            res = duckdb.sql(query).df()
-        
-            axes[i].bar(res["bin"], res["count"], width=0.8, color='skyblue', edgecolor='black')
-            axes[i].set_title(f"Read Table ID: {read_table_id}")
-            axes[i].set_xlabel("Relative time Interval between ingestion queries")
-            axes[i].grid(axis='y', linestyle='--', alpha=0.7)
-        
-        # Set common x-label
-        plt.xlabel("Bin")
-        plt.xticks(sorted(res["bin"].unique()))
-        plt.tight_layout()
-        plt.show()
-        
+        result = duckdb.sql(query).df()
+        return result
+    
+    # Create a placeholder for the chart
+    chart_placeholder = st.empty()
+    
+    # Live updating loop
+    while True:
+        result = build_select_queries_histogram(selected_instance_id)
+    
+        if result.empty:
+            st.warning("No data available. Waiting for new data...")
+        else:
+            # Create interactive plotly histogram
+            fig = px.bar(
+                result, 
+                x="bin", 
+                y="count", 
+                color="read_table_id", 
+                barmode="group",
+                labels={"bin": "Time Interval", "count": "Query Count"},
+                title="Distribution of Select Queries After Ingestion",
+            )
+            fig.update_layout(xaxis_title="Relative Time Interval", yaxis_title="Query Count")
+            
+            # Update chart
+            chart_placeholder.plotly_chart(fig, use_container_width=True)
+    
+        # Wait before refreshing (adjust the interval as needed)
+        time.sleep(5)  # Update every 5 seconds
+
 
 ###############################################################################
 # FUNCTION: Build Historical Ingestion Table (Filtered by Instance ID)
