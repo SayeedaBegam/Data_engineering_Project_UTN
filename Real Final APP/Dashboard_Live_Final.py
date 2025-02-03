@@ -151,8 +151,8 @@ def Kafka_topic_to_DuckDB():
 
             # Render the dashboard figures in the UI
             st.session_state.fig1.update_layout(width=400)
-            st.session_state.fig4.update_layout(width=400)
             st.session_state.fig2.update_layout(width=400)
+            st.session_state.fig4.update_layout(width=400)
             st.session_state.fig5.update_layout(width=400)
             uniq_id = str(int(time.time()))
 
@@ -472,7 +472,8 @@ def build_live_query_distribution(con):
     fig.update_layout(
         title='Query Type Distribution',  # Set the chart title
         template='plotly_dark',  # Use dark theme for the chart
-        width=750  # Set the width of the chart
+        width=750,  # Set the width of the chart
+        height=500  # Set the height of the chart
     )
 
     # Return the figure object for use in further visualization (e.g., in Streamlit or a web app)
