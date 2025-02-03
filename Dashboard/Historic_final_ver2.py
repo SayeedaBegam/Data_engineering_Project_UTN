@@ -287,3 +287,32 @@ st.markdown("""
         <p>Pipeline Pioneers &copy; 2025 | UTN</p>
     </footer>
 """, unsafe_allow_html=True)
+
+
+
+
+# Get unique read_table_ids
+read_table_ids = result["read_table_id"].unique()
+
+# Create subplots
+fig, axes = plt.subplots(len(read_table_ids), 1, figsize=(8, len(read_table_ids) * 4), sharex=True)
+
+# If there's only one read_table_id, axes is not a list
+if len(read_table_ids) == 1:
+    axes = [axes]
+
+# Loop through each read_table_id and plot
+for i, read_table_id in enumerate(read_table_ids):
+    query = f"SELECT bin, count FROM result WHERE read_table_id = {read_table_id} ORDER BY bin"
+    res = duckdb.sql(query).df()
+
+    axes[i].bar(res["bin"], res["count"], width=0.8, color='skyblue', edgecolor='black')
+    axes[i].set_title(f"Read Table ID: {read_table_id}")
+    axes[i].set_xlabel("Count")
+    axes[i].grid(axis='y', linestyle='--', alpha=0.7)
+
+# Set common x-label
+plt.xlabel("Bin")
+plt.xticks(sorted(res["bin"].unique()))
+plt.tight_layout()
+plt.show()
