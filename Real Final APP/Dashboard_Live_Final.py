@@ -3,16 +3,11 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import os
-from datetime import datetime
-from numerize import numerize
-from confluent_kafka import Consumer, KafkaError
+from confluent_kafka import Consumer
 import duckdb
 import json
 import time
-from datetime import datetime, timedelta
-import random
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 
 # Initialize the Streamlit layout and options
@@ -156,21 +151,23 @@ st.markdown("""
 
 
 ########### Kafka topic to DuckDB ###################
+# File path for DuckDB storage
 DUCKDB_FILE = "data.duckdb"
-KAFKA_BROKER = 'localhost:9092'  # Kafka broker address
-TOPIC_RAW_DATA = 'parquet_stream'  # Kafka topic name
-TOPIC_CLEAN_DATA = 'clean_data'
-TOPIC_QUERY_METRICS = 'query_metrics'  # Kafka topic name for sorted durations
-TOPIC_COMPILE_METRICS = 'compile_metrics'  # Kafka topic name for sorted durations
-TOPIC_LEADERBOARD= 'leaderboard'
-TOPIC_STRESS_INDEX = 'stressindex'
-
-LEADERBOARD_COLUMNS = ['instance_id','query_id','user_id','arrival_timestamp','compile_duration_ms']
-QUERY_COLUMNS = ['instance_id','was_aborted','was_cached','query_type']
-COMPILE_COLUMNS = ['instance_id','num_joins','num_scans','num_aggregations','mbytes_scanned', 'mbytes_spilled']
-STRESS_COLUMNS = ['instance_id','was_aborted','arrival_timestamp',
-                  'compile_duration_ms','execution_duration_ms',
-                  'queue_duration_ms', 'mbytes_scanned','mbytes_spilled']
+# Kafka broker address
+KAFKA_BROKER = 'localhost:9092'
+# Kafka topic names
+TOPIC_RAW_DATA = 'parquet_stream'  # Topic for raw data ingestion
+TOPIC_CLEAN_DATA = 'clean_data'  # Topic for cleaned data output
+TOPIC_QUERY_METRICS = 'query_metrics'  # Topic for query performance metrics
+TOPIC_COMPILE_METRICS = 'compile_metrics'  # Topic for compilation metrics
+TOPIC_LEADERBOARD = 'leaderboard'  # Topic for leaderboard data
+TOPIC_STRESS_INDEX = 'stressindex'  # Topic for stress index data
+# Column names for different data structures
+LEADERBOARD_COLUMNS = ['instance_id', 'query_id', 'user_id', 'arrival_timestamp', 'compile_duration_ms']
+QUERY_COLUMNS = ['instance_id', 'was_aborted', 'was_cached', 'query_type']
+COMPILE_COLUMNS = ['instance_id', 'num_joins', 'num_scans', 'num_aggregations', 'mbytes_scanned', 'mbytes_spilled']
+STRESS_COLUMNS = ['instance_id', 'was_aborted', 'arrival_timestamp', 'compile_duration_ms',
+                  'execution_duration_ms', 'queue_duration_ms', 'mbytes_scanned', 'mbytes_spilled']
 
 
 def initialize_duckdb():
